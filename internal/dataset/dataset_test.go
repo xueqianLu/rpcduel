@@ -11,8 +11,8 @@ import (
 func TestSaveLoad(t *testing.T) {
 	ds := &dataset.Dataset{
 		Meta: dataset.Meta{
-			Chain:      "testchain",
-			Blockscout: "http://bs.example.com",
+			Chain: "testchain",
+			RPC:   "http://rpc.example.com",
 		},
 		Range: dataset.Range{From: 100, To: 200},
 		Accounts: []dataset.Account{
@@ -39,8 +39,8 @@ func TestSaveLoad(t *testing.T) {
 	if loaded.Meta.Chain != "testchain" {
 		t.Errorf("chain: got %s", loaded.Meta.Chain)
 	}
-	if loaded.Meta.Blockscout != "http://bs.example.com" {
-		t.Errorf("blockscout: got %s", loaded.Meta.Blockscout)
+	if loaded.Meta.RPC != "http://rpc.example.com" {
+		t.Errorf("rpc: got %s", loaded.Meta.RPC)
 	}
 	if loaded.Range.From != 100 || loaded.Range.To != 200 {
 		t.Errorf("range: got %+v", loaded.Range)

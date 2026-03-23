@@ -11,7 +11,7 @@ import (
 // Meta holds metadata about a collected dataset.
 type Meta struct {
 	Chain       string `json:"chain"`
-	Blockscout  string `json:"blockscout"`
+	RPC         string `json:"rpc"`
 	GeneratedAt string `json:"generated_at"`
 }
 
