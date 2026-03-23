@@ -40,7 +40,7 @@ func TestRun_NoDiffs(t *testing.T) {
 	}
 
 	opts := diff.DefaultOptions()
-	result, err := replay.Run(context.Background(), ds, srv.URL, srv.URL, 10, opts)
+	result, err := replay.Run(context.Background(), ds, srv.URL, srv.URL, 10, 4, opts)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestRun_WithDiffs(t *testing.T) {
 	}
 
 	opts := diff.DefaultOptions()
-	result, err := replay.Run(context.Background(), ds, srvA.URL, srvB.URL, 10, opts)
+	result, err := replay.Run(context.Background(), ds, srvA.URL, srvB.URL, 10, 4, opts)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestRun_ArchiveNodeError(t *testing.T) {
 	}
 
 	opts := diff.DefaultOptions()
-	result, err := replay.Run(context.Background(), ds, srvA.URL, srvErr.URL, 10, opts)
+	result, err := replay.Run(context.Background(), ds, srvA.URL, srvErr.URL, 10, 4, opts)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestRun_TxCategory(t *testing.T) {
 	}
 
 	opts := diff.DefaultOptions()
-	result, err := replay.Run(context.Background(), ds, srvA.URL, srvB.URL, 10, opts)
+	result, err := replay.Run(context.Background(), ds, srvA.URL, srvB.URL, 10, 4, opts)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestRun_SuccessRate(t *testing.T) {
 	}
 
 	opts := diff.DefaultOptions()
-	result, err := replay.Run(context.Background(), ds, srv.URL, srv.URL, 10, opts)
+	result, err := replay.Run(context.Background(), ds, srv.URL, srv.URL, 10, 4, opts)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

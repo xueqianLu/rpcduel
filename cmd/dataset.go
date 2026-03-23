@@ -20,14 +20,15 @@ transactions, and accounts for use with diff-test and benchgen.`,
 }
 
 var (
-	datasetRPC       string
-	datasetFromBlock int64
-	datasetToBlock   int64
-	datasetAccounts  int
-	datasetTxs       int
-	datasetBlocks    int
-	datasetOut       string
-	datasetChain     string
+	datasetRPC         string
+	datasetFromBlock   int64
+	datasetToBlock     int64
+	datasetAccounts    int
+	datasetTxs         int
+	datasetBlocks      int
+	datasetOut         string
+	datasetChain       string
+	datasetConcurrency int
 )
 
 func init() {
@@ -39,6 +40,7 @@ func init() {
 	datasetCmd.Flags().IntVar(&datasetBlocks, "blocks", 1000, "Maximum number of blocks to collect")
 	datasetCmd.Flags().StringVar(&datasetOut, "out", "dataset.json", "Output file path")
 	datasetCmd.Flags().StringVar(&datasetChain, "chain", "ethereum", "Chain name recorded in the dataset")
+	datasetCmd.Flags().IntVar(&datasetConcurrency, "concurrency", 4, "Number of goroutines used to fetch blocks from the RPC endpoint")
 }
 
 // defaultFromBlockMultiplier is used when --from-block is not specified: we look
@@ -90,7 +92,7 @@ func runDataset(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "  collecting up to %d accounts, %d transactions, %d blocks\n",
 		datasetAccounts, datasetTxs, datasetBlocks)
 
-	accounts, txs, blocks, err := scanner.Scan(ctx, fromBlock, toBlock, datasetAccounts, datasetTxs, datasetBlocks)
+	accounts, txs, blocks, err := scanner.Scan(ctx, fromBlock, toBlock, datasetAccounts, datasetTxs, datasetBlocks, datasetConcurrency)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: scan incomplete: %v\n", err)
 	}

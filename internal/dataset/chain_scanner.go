@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/xueqianLu/rpcduel/internal/rpc"
@@ -65,42 +66,108 @@ func (s *ChainScanner) LatestBlockNumber(ctx context.Context) (int64, error) {
 	return hexToInt64(hexNum)
 }
 
-// Scan iterates blocks from toBlock down to fromBlock (inclusive) and collects
-// up to maxBlocks blocks (those with at least one transaction), up to maxTxs
-// transactions, and up to maxAccounts unique accounts (sorted by observed tx
-// count descending). Scanning stops early once all three limits are satisfied.
+// Scan iterates blocks from toBlock down to fromBlock (inclusive) using
+// concurrency goroutines in parallel and collects up to maxBlocks blocks
+// (those with at least one transaction), up to maxTxs transactions, and up
+// to maxAccounts unique accounts (sorted by observed tx count descending).
+// Scanning stops early once all three limits are satisfied.
+// If concurrency is <= 0 it defaults to 1.
 func (s *ChainScanner) Scan(
 	ctx context.Context,
 	fromBlock, toBlock int64,
 	maxAccounts, maxTxs, maxBlocks int,
+	concurrency int,
 ) ([]Account, []Transaction, []Block, error) {
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type blockResult struct {
+		num   int64
+		block *rpcRawBlock // nil means null / skipped block
+		err   error
+	}
+
+	blockNums := make(chan int64, concurrency)
+	results := make(chan blockResult, concurrency)
+
+	// Start worker goroutines.
+	var wg sync.WaitGroup
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for blockNum := range blockNums {
+				hexNum := "0x" + strconv.FormatInt(blockNum, 16)
+				resp, _, err := s.client.Call(ctx, "eth_getBlockByNumber", []interface{}{hexNum, true})
+
+				var br blockResult
+				br.num = blockNum
+				if err != nil {
+					br.err = fmt.Errorf("fetch block %d: %w", blockNum, err)
+				} else if len(resp.Result) == 0 || bytes.Equal(resp.Result, []byte("null")) {
+					// null block – skip
+				} else {
+					var block rpcRawBlock
+					if err := json.Unmarshal(resp.Result, &block); err != nil {
+						br.err = fmt.Errorf("parse block %d: %w", blockNum, err)
+					} else {
+						br.block = &block
+					}
+				}
+
+				select {
+				case results <- br:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+
+	// Close results channel after all workers finish.
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Feed block numbers from high to low; exit early on cancellation.
+	go func() {
+		defer close(blockNums)
+		for blockNum := toBlock; blockNum >= fromBlock; blockNum-- {
+			select {
+			case blockNums <- blockNum:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	// Collect results in the main goroutine (no lock needed).
 	addrTxCount := make(map[string]int64)
 	seenTxs := make(map[string]bool)
 	var txs []Transaction
 	var blocks []Block
+	var firstErr error
 
-	for blockNum := toBlock; blockNum >= fromBlock; blockNum-- {
-		if ctx.Err() != nil {
-			return buildAccounts(addrTxCount, maxAccounts), txs, blocks, ctx.Err()
+	for result := range results {
+		if result.err != nil {
+			if firstErr == nil {
+				firstErr = result.err
+			}
+			cancel()
+			break
 		}
 
-		hexNum := "0x" + strconv.FormatInt(blockNum, 16)
-		resp, _, err := s.client.Call(ctx, "eth_getBlockByNumber", []interface{}{hexNum, true})
-		if err != nil {
-			return buildAccounts(addrTxCount, maxAccounts), txs, blocks,
-				fmt.Errorf("fetch block %d: %w", blockNum, err)
+		if result.block == nil {
+			continue // null / empty block
 		}
 
-		// Null result means the block does not exist yet.
-		if len(resp.Result) == 0 || bytes.Equal(resp.Result, []byte("null")) {
-			continue
-		}
-
-		var block rpcRawBlock
-		if err := json.Unmarshal(resp.Result, &block); err != nil {
-			return buildAccounts(addrTxCount, maxAccounts), txs, blocks,
-				fmt.Errorf("parse block %d: %w", blockNum, err)
-		}
+		block := result.block
+		blockNum := result.num
 
 		txCount := len(block.Transactions)
 		if txCount > 0 {
@@ -138,11 +205,16 @@ func (s *ChainScanner) Scan(
 
 		// Stop early once all three limits are satisfied.
 		if len(blocks) >= maxBlocks && len(txs) >= maxTxs && len(addrTxCount) >= maxAccounts {
+			cancel()
 			break
 		}
 	}
 
-	return buildAccounts(addrTxCount, maxAccounts), txs, blocks, nil
+	// Drain any remaining results so workers / closer goroutines can exit.
+	for range results {
+	}
+
+	return buildAccounts(addrTxCount, maxAccounts), txs, blocks, firstErr
 }
 
 // buildAccounts converts the address→txCount map into a slice sorted by

@@ -98,7 +98,7 @@ func TestChainScanner_Scan_BasicCollection(t *testing.T) {
 	})
 
 	scanner := dataset.NewChainScanner(srv.URL)
-	accounts, txs, blks, err := scanner.Scan(context.Background(), 108, 110, 100, 100, 100)
+	accounts, txs, blks, err := scanner.Scan(context.Background(), 108, 110, 100, 100, 100, 4)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestChainScanner_Scan_TxLimit(t *testing.T) {
 	})
 
 	scanner := dataset.NewChainScanner(srv.URL)
-	_, txs, _, err := scanner.Scan(context.Background(), 100, 100, 100, 3, 100)
+	_, txs, _, err := scanner.Scan(context.Background(), 100, 100, 100, 3, 100, 1)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestChainScanner_Scan_BlocksDescending(t *testing.T) {
 	})
 
 	scanner := dataset.NewChainScanner(srv.URL)
-	_, _, _, err := scanner.Scan(context.Background(), 198, 200, 100, 100, 100)
+	_, _, _, err := scanner.Scan(context.Background(), 198, 200, 100, 100, 100, 1)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestChainScanner_Scan_AccountsSortedByTxCount(t *testing.T) {
 	})
 
 	scanner := dataset.NewChainScanner(srv.URL)
-	accounts, _, _, err := scanner.Scan(context.Background(), 100, 100, 100, 100, 100)
+	accounts, _, _, err := scanner.Scan(context.Background(), 100, 100, 100, 100, 100, 4)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestChainScanner_Scan_NullBlock(t *testing.T) {
 	})
 
 	scanner := dataset.NewChainScanner(srv.URL)
-	_, txs, blks, err := scanner.Scan(context.Background(), 99, 100, 100, 100, 100)
+	_, txs, blks, err := scanner.Scan(context.Background(), 99, 100, 100, 100, 100, 1)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -246,5 +246,46 @@ func TestChainScanner_Scan_NullBlock(t *testing.T) {
 	}
 	if len(txs) != 1 {
 		t.Errorf("expected 1 tx, got %d", len(txs))
+	}
+}
+
+func TestChainScanner_Scan_Concurrent(t *testing.T) {
+	// 10 blocks, each with 2 transactions. Verify totals are correct under
+	// concurrent fetching (concurrency=4).
+	srv := mockRPCServer(t, func(method string, params json.RawMessage) interface{} {
+		if method != "eth_getBlockByNumber" {
+			return nil
+		}
+		var p []json.RawMessage
+		_ = json.Unmarshal(params, &p)
+		var hexNum string
+		_ = json.Unmarshal(p[0], &hexNum)
+		var num int64
+		fmt.Sscanf(hexNum[2:], "%x", &num)
+		return map[string]interface{}{
+			"number": hexNum,
+			"transactions": []map[string]interface{}{
+				{"hash": fmt.Sprintf("0xtx%da", num), "from": fmt.Sprintf("0xfrom%d", num), "to": fmt.Sprintf("0xto%d", num)},
+				{"hash": fmt.Sprintf("0xtx%db", num), "from": fmt.Sprintf("0xfrom%d", num), "to": fmt.Sprintf("0xto%d", num)},
+			},
+		}
+	})
+
+	scanner := dataset.NewChainScanner(srv.URL)
+	accounts, txs, blks, err := scanner.Scan(context.Background(), 1, 10, 1000, 1000, 1000, 4)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+	if len(blks) != 10 {
+		t.Errorf("expected 10 blocks, got %d", len(blks))
+	}
+	if len(txs) != 20 {
+		t.Errorf("expected 20 transactions, got %d", len(txs))
+	}
+	// Each block has the same from/to pair → 2 unique accounts per block, but
+	// from addr is the same across txs in the same block (deduped).
+	// 10 unique from addresses + 10 unique to addresses = 20 unique accounts.
+	if len(accounts) != 20 {
+		t.Errorf("expected 20 accounts, got %d", len(accounts))
 	}
 }

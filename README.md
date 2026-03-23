@@ -31,7 +31,7 @@ It collects real on-chain data, runs response-consistency tests across multiple 
 | **Response diffing** | Deep JSON comparison with hex/decimal normalisation, field ignoring, and order-insensitive array comparison |
 | **Benchmarking** | Concurrent load generation with QPS, avg/P95/P99 latency and error-rate reporting |
 | **Duel mode** | Run diff and bench simultaneously against two endpoints |
-| **On-chain dataset collection** | Scan a block range (high → low) via an Ethereum JSON-RPC endpoint and collect blocks, transactions, and accounts ranked by activity |
+| **On-chain dataset collection** | Scan a block range (high → low) via an Ethereum JSON-RPC endpoint using multiple concurrent goroutines and collect blocks, transactions, and accounts ranked by activity |
 | **Data-driven consistency tests** | Replay real chain data against two endpoints and classify every difference (`balance_mismatch`, `nonce_mismatch`, `tx_mismatch`, …) |
 | **Scenario generation** | Turn a dataset into a weighted, multi-scenario bench file ready for `bench --input` |
 | **Archive-node awareness** | `missing trie node` / `state not found` errors are detected and excluded from diff counts |
@@ -201,6 +201,7 @@ rpcduel dataset [flags]
 | `--accounts` | `1000` | Max accounts to collect (sorted by observed tx count) |
 | `--txs` | `1000` | Max transactions to collect |
 | `--blocks` | `1000` | Max non-empty blocks to collect |
+| `--concurrency` | `4` | Number of goroutines used to fetch blocks from the RPC endpoint |
 | `--chain` | `ethereum` | Chain name written to dataset metadata |
 | `--out` | `dataset.json` | Output file path |
 
@@ -236,6 +237,7 @@ rpcduel diff-test [flags]
 | `--dataset` | `dataset.json` | Path to the dataset file |
 | `--rpc` | _(required, =2)_ | Exactly two endpoint URLs |
 | `--max-tx-per-account` | `100` | Max transactions tested per account (0 = unlimited) |
+| `--concurrency` | `4` | Number of goroutines used to execute RPC calls |
 | `--ignore-field` | | Field name(s) to skip in comparison |
 | `--timeout` | `30s` | Per-request timeout |
 | `--output` | `text` | `text` or `json` |

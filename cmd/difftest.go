@@ -22,12 +22,13 @@ response differences.`,
 }
 
 var (
-	diffTestDataset        string
-	diffTestRPCs           []string
+	diffTestDataset         string
+	diffTestRPCs            []string
 	diffTestMaxTxPerAccount int
-	diffTestOutput         string
-	diffTestIgnoreFields   []string
-	diffTestTimeout        time.Duration
+	diffTestOutput          string
+	diffTestIgnoreFields    []string
+	diffTestTimeout         time.Duration
+	diffTestConcurrency     int
 )
 
 func init() {
@@ -39,6 +40,7 @@ func init() {
 	diffTestCmd.Flags().StringArrayVar(&diffTestIgnoreFields, "ignore-field", nil,
 		"JSON field names to ignore in comparison")
 	diffTestCmd.Flags().DurationVar(&diffTestTimeout, "timeout", 30*time.Second, "Per-request timeout")
+	diffTestCmd.Flags().IntVar(&diffTestConcurrency, "concurrency", 4, "Number of goroutines used to execute RPC calls")
 }
 
 func runDiffTest(cmd *cobra.Command, args []string) error {
@@ -60,7 +62,7 @@ func runDiffTest(cmd *cobra.Command, args []string) error {
 		len(ds.Accounts), len(ds.Transactions), len(ds.Blocks))
 
 	ctx := context.Background()
-	result, err := replay.Run(ctx, ds, diffTestRPCs[0], diffTestRPCs[1], diffTestMaxTxPerAccount, opts)
+	result, err := replay.Run(ctx, ds, diffTestRPCs[0], diffTestRPCs[1], diffTestMaxTxPerAccount, diffTestConcurrency, opts)
 	if err != nil {
 		return fmt.Errorf("diff-test: %w", err)
 	}

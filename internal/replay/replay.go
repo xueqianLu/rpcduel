@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xueqianLu/rpcduel/internal/dataset"
@@ -95,28 +96,41 @@ type Config struct {
 	DiffOpts        diff.Options
 }
 
-// Run executes the full diff-test suite against ds.
-func Run(ctx context.Context, ds *dataset.Dataset, epA, epB string, maxTxPerAccount int, opts diff.Options) (*Result, error) {
+// Run executes the full diff-test suite against ds using concurrency goroutines.
+// If concurrency is <= 0 it defaults to 1.
+func Run(ctx context.Context, ds *dataset.Dataset, epA, epB string, maxTxPerAccount int, concurrency int, opts diff.Options) (*Result, error) {
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+
 	const requestTimeout = 30 * time.Second
 	cA := rpc.NewClient(epA, requestTimeout)
 	cB := rpc.NewClient(epB, requestTimeout)
 
-	result := &Result{}
+	result := &Result{
+		AccountsTested:     len(ds.Accounts),
+		TransactionsTested: len(ds.Transactions),
+		BlocksTested:       len(ds.Blocks),
+	}
 
-	// Build a lookup: address → list of block numbers from dataset transactions
+	// Build a lookup: address → list of block numbers from dataset transactions.
 	addrBlocks := make(map[string][]int64)
 	for _, tx := range ds.Transactions {
 		addrBlocks[strings.ToLower(tx.From)] = append(addrBlocks[strings.ToLower(tx.From)], tx.BlockNumber)
 	}
 
-	// -----------------------------------------------------------------------
-	// 1. Account dimension: eth_getBalance + eth_getTransactionCount
-	// -----------------------------------------------------------------------
-	for _, account := range ds.Accounts {
-		result.AccountsTested++
-		addr := account.Address
+	type rpcTask struct {
+		method string
+		params []interface{}
+		cat    DiffCategory
+	}
 
-		// Collect block numbers to query; fall back to "latest" if none.
+	// Build the full ordered task list.
+	var tasks []rpcTask
+
+	// 1. Account dimension: eth_getBalance + eth_getTransactionCount
+	for _, account := range ds.Accounts {
+		addr := account.Address
 		blockNums := addrBlocks[strings.ToLower(addr)]
 		if maxTxPerAccount > 0 && len(blockNums) > maxTxPerAccount {
 			blockNums = blockNums[:maxTxPerAccount]
@@ -124,7 +138,6 @@ func Run(ctx context.Context, ds *dataset.Dataset, epA, epB string, maxTxPerAcco
 		if len(blockNums) == 0 {
 			blockNums = []int64{-1} // -1 sentinel → use "latest"
 		}
-
 		for _, bn := range blockNums {
 			var blockParam interface{}
 			if bn < 0 {
@@ -132,108 +145,130 @@ func Run(ctx context.Context, ds *dataset.Dataset, epA, epB string, maxTxPerAcco
 			} else {
 				blockParam = fmt.Sprintf("0x%x", bn)
 			}
-
-			// eth_getBalance
 			params := []interface{}{addr, blockParam}
-			if d := callAndDiff(ctx, cA, cB, "eth_getBalance", params, opts, CategoryBalance, result); d != nil {
-				result.Diffs = append(result.Diffs, *d)
-			}
-
-			// eth_getTransactionCount
-			if d := callAndDiff(ctx, cA, cB, "eth_getTransactionCount", params, opts, CategoryNonce, result); d != nil {
-				result.Diffs = append(result.Diffs, *d)
-			}
+			tasks = append(tasks, rpcTask{"eth_getBalance", params, CategoryBalance})
+			tasks = append(tasks, rpcTask{"eth_getTransactionCount", params, CategoryNonce})
 		}
 	}
 
-	// -----------------------------------------------------------------------
 	// 2. Transaction dimension: eth_getTransactionByHash + eth_getTransactionReceipt
-	// -----------------------------------------------------------------------
 	for _, tx := range ds.Transactions {
-		result.TransactionsTested++
 		params := []interface{}{tx.Hash}
-
-		if d := callAndDiff(ctx, cA, cB, "eth_getTransactionByHash", params, opts, CategoryTx, result); d != nil {
-			result.Diffs = append(result.Diffs, *d)
-		}
-		if d := callAndDiff(ctx, cA, cB, "eth_getTransactionReceipt", params, opts, CategoryReceipt, result); d != nil {
-			result.Diffs = append(result.Diffs, *d)
-		}
+		tasks = append(tasks, rpcTask{"eth_getTransactionByHash", params, CategoryTx})
+		tasks = append(tasks, rpcTask{"eth_getTransactionReceipt", params, CategoryReceipt})
 	}
 
-	// -----------------------------------------------------------------------
 	// 3. Block dimension: eth_getBlockByNumber
-	// -----------------------------------------------------------------------
 	for _, block := range ds.Blocks {
-		result.BlocksTested++
 		params := []interface{}{fmt.Sprintf("0x%x", block.Number), false}
+		tasks = append(tasks, rpcTask{"eth_getBlockByNumber", params, CategoryBlock})
+	}
 
-		if d := callAndDiff(ctx, cA, cB, "eth_getBlockByNumber", params, opts, CategoryBlock, result); d != nil {
-			result.Diffs = append(result.Diffs, *d)
+	taskCh := make(chan rpcTask, len(tasks))
+	for _, t := range tasks {
+		taskCh <- t
+	}
+	close(taskCh)
+
+	outCh := make(chan callOutcome, concurrency)
+
+	var wg sync.WaitGroup
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for t := range taskCh {
+				outCh <- callAndDiff(ctx, cA, cB, t.method, t.params, opts, t.cat)
+			}
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(outCh)
+	}()
+
+	for out := range outCh {
+		result.TotalRequests += out.totalReqs
+		result.SuccessRequests += out.successReqs
+		result.Unsupported += out.unsupported
+		if out.diff != nil {
+			result.Diffs = append(result.Diffs, *out.diff)
 		}
 	}
 
 	return result, nil
 }
 
-// callAndDiff sends the same call to both clients and returns a FoundDiff if
-// the responses differ. It returns nil when they match or both error identically.
-// result.TotalRequests and result.SuccessRequests are updated in-place.
-func callAndDiff(ctx context.Context, cA, cB *rpc.Client, method string, params []interface{}, opts diff.Options, cat DiffCategory, result *Result) *FoundDiff {
+// callOutcome carries the counters and optional diff produced by one RPC pair.
+type callOutcome struct {
+	totalReqs   int
+	successReqs int
+	unsupported int
+	diff        *FoundDiff
+}
+
+// callAndDiff sends the same call to both clients and returns a callOutcome
+// describing whether the responses match. Responses are compared only when
+// both endpoints succeed (non-archive-node error).
+func callAndDiff(ctx context.Context, cA, cB *rpc.Client, method string, params []interface{}, opts diff.Options, cat DiffCategory) callOutcome {
 	respA, _, errA := cA.Call(ctx, method, params)
 	respB, _, errB := cB.Call(ctx, method, params)
 
-	result.TotalRequests++
+	out := callOutcome{totalReqs: 1}
 
 	// Archive/pruned node detection: if either error looks like a missing-state
 	// error, mark as unsupported and do not count this as a diff.
 	if isArchiveError(errA) || isArchiveError(errB) {
-		result.Unsupported++
-		return nil
+		out.unsupported = 1
+		return out
 	}
 
 	if errA != nil && errB != nil {
 		// Both failed — not a diff.
-		return nil
+		return out
 	}
 
 	if errA != nil || errB != nil {
-		return &FoundDiff{
+		out.diff = &FoundDiff{
 			Category: CategoryRPCError,
 			Method:   method,
 			Params:   params,
 			Detail:   fmt.Sprintf("one endpoint errored: %v vs %v", errA, errB),
 		}
+		return out
 	}
 
 	// Both endpoints responded successfully.
-	result.SuccessRequests++
+	out.successReqs = 1
 
 	// Check for missing / null result on one side.
 	aIsNull := isNull(respA)
 	bIsNull := isNull(respB)
 	if aIsNull != bIsNull {
-		return &FoundDiff{
+		out.diff = &FoundDiff{
 			Category: CategoryMissing,
 			Method:   method,
 			Params:   params,
 			Detail:   fmt.Sprintf("one endpoint returned null: left=%v right=%v", aIsNull, bIsNull),
 		}
+		return out
 	}
 	if aIsNull && bIsNull {
-		return nil
+		return out
 	}
 
 	diffs, err := diff.Compare(respA.Result, respB.Result, opts)
 	if err != nil || len(diffs) == 0 {
-		return nil
+		return out
 	}
-	return &FoundDiff{
+	out.diff = &FoundDiff{
 		Category: cat,
 		Method:   method,
 		Params:   params,
 		Detail:   diffs[0].String(),
 	}
+	return out
 }
 
 // isNull reports whether a response has a JSON null result.
