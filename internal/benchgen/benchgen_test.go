@@ -9,7 +9,7 @@ import (
 
 func sampleDataset() *dataset.Dataset {
 	return &dataset.Dataset{
-		Chain: "test",
+		Meta: dataset.Meta{Chain: "test"},
 		Range: dataset.Range{From: 100, To: 200},
 		Accounts: []dataset.Account{
 			{Address: "0xaaa", TxCount: 10},
@@ -33,6 +33,10 @@ func TestGenerate_Scenarios(t *testing.T) {
 		t.Fatal("expected at least one scenario")
 	}
 
+	if bf.Version != "1" {
+		t.Errorf("expected version '1', got %q", bf.Version)
+	}
+
 	// Check expected scenario names are present
 	names := make(map[string]bool)
 	for _, s := range bf.Scenarios {
@@ -44,6 +48,22 @@ func TestGenerate_Scenarios(t *testing.T) {
 		if !names[req] {
 			t.Errorf("expected scenario %q not found", req)
 		}
+	}
+}
+
+func TestGenerate_Weights(t *testing.T) {
+	bf := benchgen.Generate(sampleDataset(), nil)
+
+	totalWeight := 0.0
+	for _, s := range bf.Scenarios {
+		if s.Weight <= 0 {
+			t.Errorf("scenario %q has non-positive weight %v", s.Name, s.Weight)
+		}
+		totalWeight += s.Weight
+	}
+	// Weights should sum to approximately 1.0
+	if totalWeight < 0.99 || totalWeight > 1.01 {
+		t.Errorf("scenario weights sum to %v, expected ~1.0", totalWeight)
 	}
 }
 
@@ -83,7 +103,24 @@ func TestSaveLoadBenchFile(t *testing.T) {
 		t.Fatalf("LoadBenchFile: %v", err)
 	}
 
+	if loaded.Version != bf.Version {
+		t.Errorf("version mismatch: got %q want %q", loaded.Version, bf.Version)
+	}
 	if len(loaded.Scenarios) != len(bf.Scenarios) {
 		t.Errorf("scenario count mismatch: got %d want %d", len(loaded.Scenarios), len(bf.Scenarios))
+	}
+}
+
+func TestWeightedRequests(t *testing.T) {
+	bf := benchgen.Generate(sampleDataset(), nil)
+	n := 50
+	reqs := bf.WeightedRequests(n, nil)
+	if len(reqs) != n {
+		t.Errorf("expected %d weighted requests, got %d", n, len(reqs))
+	}
+	for _, r := range reqs {
+		if r.Method == "" {
+			t.Error("weighted request has empty method")
+		}
 	}
 }

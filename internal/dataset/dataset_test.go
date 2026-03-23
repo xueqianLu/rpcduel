@@ -10,7 +10,10 @@ import (
 
 func TestSaveLoad(t *testing.T) {
 	ds := &dataset.Dataset{
-		Chain: "testchain",
+		Meta: dataset.Meta{
+			Chain:      "testchain",
+			Blockscout: "http://bs.example.com",
+		},
 		Range: dataset.Range{From: 100, To: 200},
 		Accounts: []dataset.Account{
 			{Address: "0xabc", TxCount: 42},
@@ -33,8 +36,11 @@ func TestSaveLoad(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if loaded.Chain != "testchain" {
-		t.Errorf("chain: got %s", loaded.Chain)
+	if loaded.Meta.Chain != "testchain" {
+		t.Errorf("chain: got %s", loaded.Meta.Chain)
+	}
+	if loaded.Meta.Blockscout != "http://bs.example.com" {
+		t.Errorf("blockscout: got %s", loaded.Meta.Blockscout)
 	}
 	if loaded.Range.From != 100 || loaded.Range.To != 200 {
 		t.Errorf("range: got %+v", loaded.Range)
