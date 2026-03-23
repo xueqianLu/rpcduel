@@ -124,3 +124,26 @@ func TestWeightedRequests(t *testing.T) {
 		}
 	}
 }
+
+func TestWeightedTaggedRequests(t *testing.T) {
+	bf := benchgen.Generate(sampleDataset(), nil)
+	n := 100
+	tagged := bf.WeightedTaggedRequests(n, nil)
+	if len(tagged) != n {
+		t.Errorf("expected %d tagged requests, got %d", n, len(tagged))
+	}
+	scenariosSeen := make(map[string]bool)
+	for _, r := range tagged {
+		if r.Method == "" {
+			t.Error("tagged request has empty method")
+		}
+		if r.Scenario == "" {
+			t.Error("tagged request has empty scenario name")
+		}
+		scenariosSeen[r.Scenario] = true
+	}
+	// With n=100 and multiple scenarios, we should see at least 2 distinct scenarios.
+	if len(scenariosSeen) < 2 {
+		t.Errorf("expected at least 2 distinct scenarios, got %d: %v", len(scenariosSeen), scenariosSeen)
+	}
+}

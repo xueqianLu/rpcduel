@@ -2,10 +2,13 @@
 package report
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/xueqianLu/rpcduel/internal/bench"
 	"github.com/xueqianLu/rpcduel/internal/diff"
@@ -80,14 +83,61 @@ func PrintBench(w io.Writer, r BenchReport, format Format) {
 	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 40))
 	for _, s := range r.Summaries {
 		fmt.Fprintf(w, "Endpoint:   %s\n", s.Endpoint)
+		if s.Scenario != "" {
+			fmt.Fprintf(w, "  Scenario: %s\n", s.Scenario)
+		}
 		fmt.Fprintf(w, "  Requests: %d\n", s.Total)
 		fmt.Fprintf(w, "  Errors:   %d (%.1f%%)\n", s.Errors, s.ErrorRate*100)
 		fmt.Fprintf(w, "  QPS:      %.2f\n", s.QPS)
 		fmt.Fprintf(w, "  Avg:      %s\n", s.AvgLatency)
+		if s.P50 > 0 {
+			fmt.Fprintf(w, "  P50:      %s\n", s.P50)
+		}
 		fmt.Fprintf(w, "  P95:      %s\n", s.P95)
 		fmt.Fprintf(w, "  P99:      %s\n", s.P99)
+		if s.Min > 0 || s.Max > 0 {
+			fmt.Fprintf(w, "  Min:      %s\n", s.Min)
+			fmt.Fprintf(w, "  Max:      %s\n", s.Max)
+		}
 		fmt.Fprintln(w)
 	}
+}
+
+// WriteBenchCSV writes a detailed per-scenario benchmark report to w as CSV.
+// Columns: endpoint, scenario, total, errors, error_rate_pct, qps,
+// avg_latency_ms, p50_latency_ms, p95_latency_ms, p99_latency_ms,
+// min_latency_ms, max_latency_ms.
+func WriteBenchCSV(w io.Writer, summaries []bench.Summary) error {
+	cw := csv.NewWriter(w)
+	if err := cw.Write([]string{
+		"endpoint", "scenario", "total", "errors",
+		"error_rate_pct", "qps",
+		"avg_latency_ms", "p50_latency_ms", "p95_latency_ms", "p99_latency_ms",
+		"min_latency_ms", "max_latency_ms",
+	}); err != nil {
+		return err
+	}
+	ms := float64(time.Millisecond)
+	for _, s := range summaries {
+		if err := cw.Write([]string{
+			s.Endpoint,
+			s.Scenario,
+			strconv.Itoa(s.Total),
+			strconv.Itoa(s.Errors),
+			fmt.Sprintf("%.2f", s.ErrorRate*100),
+			fmt.Sprintf("%.2f", s.QPS),
+			fmt.Sprintf("%.3f", float64(s.AvgLatency)/ms),
+			fmt.Sprintf("%.3f", float64(s.P50)/ms),
+			fmt.Sprintf("%.3f", float64(s.P95)/ms),
+			fmt.Sprintf("%.3f", float64(s.P99)/ms),
+			fmt.Sprintf("%.3f", float64(s.Min)/ms),
+			fmt.Sprintf("%.3f", float64(s.Max)/ms),
+		}); err != nil {
+			return err
+		}
+	}
+	cw.Flush()
+	return cw.Error()
 }
 
 // PrintDuel writes a duel report to the given writer.

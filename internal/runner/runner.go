@@ -13,6 +13,7 @@ import (
 // Result holds the outcome of a single RPC call.
 type Result struct {
 	Endpoint string
+	Tag      string // scenario or other caller-supplied label; empty if unused
 	Response *rpc.Response
 	Latency  time.Duration
 	Err      error
@@ -21,6 +22,7 @@ type Result struct {
 // Task is a single unit of work for the runner.
 type Task struct {
 	Endpoint string
+	Tag      string // scenario or other caller-supplied label; empty if unused
 	Method   string
 	Params   []interface{}
 }
@@ -52,7 +54,7 @@ func Run(ctx context.Context, tasks []Task, concurrency int, timeout time.Durati
 			for task := range taskCh {
 				select {
 				case <-ctx.Done():
-					results <- Result{Endpoint: task.Endpoint, Err: ctx.Err()}
+					results <- Result{Endpoint: task.Endpoint, Tag: task.Tag, Err: ctx.Err()}
 					continue
 				default:
 				}
@@ -60,6 +62,7 @@ func Run(ctx context.Context, tasks []Task, concurrency int, timeout time.Durati
 				resp, lat, err := c.Call(ctx, task.Method, task.Params)
 				results <- Result{
 					Endpoint: task.Endpoint,
+					Tag:      task.Tag,
 					Response: resp,
 					Latency:  lat,
 					Err:      err,
@@ -320,6 +323,7 @@ func RunDurationFromTasks(ctx context.Context, tasks []Task, concurrency int,
 				resp, lat, err := c.Call(ctx, task.Method, task.Params)
 				results <- Result{
 					Endpoint: task.Endpoint,
+					Tag:      task.Tag,
 					Response: resp,
 					Latency:  lat,
 					Err:      err,

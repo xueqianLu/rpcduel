@@ -19,7 +19,6 @@ It collects real on-chain data, runs response-consistency tests across multiple 
 - [Data-Driven Testing Workflow](#data-driven-testing-workflow)
 - [Output Formats](#output-formats)
 - [Dataset File Format](#dataset-file-format)
-- [Bench Scenario File Format](#bench-scenario-file-format)
 - [Architecture](#architecture)
 
 ---
@@ -33,7 +32,7 @@ It collects real on-chain data, runs response-consistency tests across multiple 
 | **Duel mode** | Run diff and bench simultaneously against two endpoints |
 | **On-chain dataset collection** | Scan a block range (high → low) via an Ethereum JSON-RPC endpoint using multiple concurrent goroutines and collect blocks, transactions, and accounts ranked by activity; per-account transaction lists are stored in the dataset for efficient diff-test |
 | **Data-driven consistency tests** | Replay real chain data against two endpoints and classify every difference (`balance_mismatch`, `nonce_mismatch`, `tx_mismatch`, …) |
-| **Scenario generation** | Turn a dataset into a weighted, multi-scenario bench file ready for `bench --input` |
+| **Scenario-driven load test** | Turn a dataset into weighted scenarios and run them directly with `benchgen`; per-scenario metrics (QPS, avg/P50/P95/P99/min/max latency, error rate) are written to a CSV report |
 | **Archive-node awareness** | `missing trie node` / `state not found` errors are detected and excluded from diff counts |
 | **Flexible output** | Human-readable text or machine-parseable JSON from every command |
 
@@ -288,8 +287,8 @@ rpcduel diff-test \
 
 ### `benchgen`
 
-Generate a multi-scenario benchmark file from a dataset.  
-The output `bench.json` can be passed directly to `rpcduel bench --input`.
+Generate weighted load-test scenarios from a dataset and **run them directly** against one or more endpoints.  
+After the run, a performance summary is printed to stdout and an optional per-scenario CSV report can be written to a file.
 
 ```
 rpcduel benchgen [flags]
@@ -298,7 +297,13 @@ rpcduel benchgen [flags]
 | Flag | Default | Description |
 |---|---|---|
 | `--dataset` | `dataset.json` | Path to the dataset file |
-| `--out` | `bench.json` | Output benchmark scenario file |
+| `--rpc` | _(required, ≥1)_ | Endpoint URL(s) to benchmark |
+| `--concurrency` | `10` | Number of concurrent workers |
+| `--requests` | `1000` | Total requests to send (0 = use `--duration`) |
+| `--duration` | | Run for a fixed time instead (e.g. `60s`) |
+| `--timeout` | `30s` | Per-request timeout |
+| `--output` | `text` | `text` or `json` for the stdout summary |
+| `--csv` | | Write a detailed per-scenario CSV report to this file |
 
 **Generated scenarios**
 
@@ -314,12 +319,22 @@ rpcduel benchgen [flags]
 | `debug_trace_block` | 0.05 | `debug_traceBlockByNumber` |
 | `mixed_balance` | 0.05 | `eth_getBalance` (shuffled accounts) |
 
+Requests are sampled from all scenarios proportionally to their weights, producing realistic mixed traffic.
+
+**CSV report columns**
+
+`endpoint`, `scenario`, `total`, `errors`, `error_rate_pct`, `qps`, `avg_latency_ms`, `p50_latency_ms`, `p95_latency_ms`, `p99_latency_ms`, `min_latency_ms`, `max_latency_ms`
+
 **Example**
 
 ```bash
 rpcduel benchgen \
   --dataset mainnet-dataset.json \
-  --out mainnet-bench.json
+  --rpc https://node-a.example.com \
+  --rpc https://node-b.example.com \
+  --concurrency 20 \
+  --requests 5000 \
+  --csv bench-report.csv
 ```
 
 ---
@@ -337,11 +352,8 @@ rpcduel benchgen \
           diff-test │         │ benchgen
                     │         │
                     ▼         ▼
-              Consistency  bench.json
-               report      │
-                         bench --input bench.json
-                            │
-                      Performance report
+              Consistency  Performance report
+               report       + bench-report.csv
 ```
 
 **Step 1 — Collect data**
@@ -367,21 +379,19 @@ rpcduel diff-test \
 
 Progress is printed to stderr as tasks complete. When finished, the summary is printed to stdout (or `--report` file) and a full CSV of all diffs is written to `--csv`.
 
-**Step 3 — Generate load-test scenarios**
+**Step 3 — Run the load test directly**
 
 ```bash
-rpcduel benchgen --dataset dataset.json --out bench.json
-```
-
-**Step 4 — Run the benchmark**
-
-```bash
-rpcduel bench \
+rpcduel benchgen \
+  --dataset dataset.json \
   --rpc https://node-a.example.com \
-  --input bench.json \
-  --concurrency 50 \
-  --duration 60s
+  --concurrency 20 \
+  --requests 5000 \
+  --csv bench-report.csv
 ```
+
+Scenarios are generated internally from the dataset and executed immediately.  
+The per-scenario performance summary is printed to stdout and a detailed CSV is written to `--csv`.
 
 ---
 
@@ -503,30 +513,6 @@ Endpoint:   https://rpc.example.com
 | `transactions` | `block_number` ascending (chronological) |
 
 Each account record includes a `transactions` list (up to `--max-tx-per-account` entries) containing the transactions that account participated in during the scan range. `diff-test` uses these stored block numbers to query historical state without re-fetching transaction data from the RPC node.
-
----
-
-## Bench Scenario File Format
-
-```json
-{
-  "version": "1",
-  "scenarios": [
-    {
-      "name": "balance",
-      "weight": 0.20,
-      "requests": [
-        {
-          "method": "eth_getBalance",
-          "params": ["0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", "latest"]
-        }
-      ]
-    }
-  ]
-}
-```
-
-Weights are used by `rpcduel bench --input` to sample requests proportionally across scenarios, producing realistic mixed traffic.
 
 ---
 

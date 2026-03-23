@@ -55,11 +55,72 @@ func LoadBenchFile(path string) (*BenchFile, error) {
 	return &bf, nil
 }
 
+// TaggedRequest is a Request paired with the name of the scenario it came from.
+type TaggedRequest struct {
+	Request
+	Scenario string
+}
+
 // FlattenRequests returns all requests from all scenarios as a flat slice.
 func (bf *BenchFile) FlattenRequests() []Request {
 	var out []Request
 	for _, s := range bf.Scenarios {
 		out = append(out, s.Requests...)
+	}
+	return out
+}
+
+// WeightedTaggedRequests is like WeightedRequests but each returned element
+// also carries the name of the scenario it was drawn from.
+func (bf *BenchFile) WeightedTaggedRequests(n int, rng *rand.Rand) []TaggedRequest {
+	if rng == nil {
+		rng = rand.New(rand.NewSource(42))
+	}
+
+	type scenarioEntry struct {
+		s          *Scenario
+		cumulative float64
+	}
+	var entries []scenarioEntry
+	total := 0.0
+	for i := range bf.Scenarios {
+		s := &bf.Scenarios[i]
+		if len(s.Requests) == 0 {
+			continue
+		}
+		w := s.Weight
+		if w <= 0 {
+			continue
+		}
+		total += w
+		entries = append(entries, scenarioEntry{s: s, cumulative: total})
+	}
+
+	if total == 0 || len(entries) == 0 {
+		flat := bf.FlattenRequests()
+		if len(flat) == 0 {
+			return nil
+		}
+		out := make([]TaggedRequest, n)
+		for i := range out {
+			out[i] = TaggedRequest{Request: flat[i%len(flat)]}
+		}
+		return out
+	}
+
+	out := make([]TaggedRequest, n)
+	for i := range out {
+		r := rng.Float64() * total
+		for _, e := range entries {
+			if r <= e.cumulative {
+				reqs := e.s.Requests
+				out[i] = TaggedRequest{
+					Request:  reqs[rng.Intn(len(reqs))],
+					Scenario: e.s.Name,
+				}
+				break
+			}
+		}
 	}
 	return out
 }

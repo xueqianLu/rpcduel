@@ -9,10 +9,13 @@ import (
 
 // Metrics collects latency and error statistics.
 type Metrics struct {
-	Endpoint string
-	Total    int
-	Errors   int
+	Endpoint  string
+	Scenario  string // optional scenario label (set by caller)
+	Total     int
+	Errors    int
 	Latencies []time.Duration
+	min       time.Duration
+	max       time.Duration
 	StartTime time.Time
 	EndTime   time.Time
 }
@@ -31,6 +34,12 @@ func (m *Metrics) Record(latency time.Duration, isError bool) {
 	m.Latencies = append(m.Latencies, latency)
 	if isError {
 		m.Errors++
+	}
+	if m.Total == 1 || latency < m.min {
+		m.min = latency
+	}
+	if latency > m.max {
+		m.max = latency
 	}
 }
 
@@ -94,13 +103,17 @@ func (m *Metrics) Percentile(p float64) time.Duration {
 // Summary is a snapshot of computed metrics.
 type Summary struct {
 	Endpoint   string
+	Scenario   string        // non-empty when per-scenario tracking is used
 	Total      int
 	Errors     int
 	ErrorRate  float64
 	QPS        float64
 	AvgLatency time.Duration
+	P50        time.Duration
 	P95        time.Duration
 	P99        time.Duration
+	Min        time.Duration
+	Max        time.Duration
 }
 
 // Summarize computes the summary from the collected metrics.
@@ -108,12 +121,16 @@ type Summary struct {
 func (m *Metrics) Summarize() Summary {
 	return Summary{
 		Endpoint:   m.Endpoint,
+		Scenario:   m.Scenario,
 		Total:      m.Total,
 		Errors:     m.Errors,
 		ErrorRate:  m.ErrorRate(),
 		QPS:        m.QPS(),
 		AvgLatency: m.AvgLatency(),
+		P50:        m.Percentile(50),
 		P95:        m.Percentile(95),
 		P99:        m.Percentile(99),
+		Min:        m.min,
+		Max:        m.max,
 	}
 }

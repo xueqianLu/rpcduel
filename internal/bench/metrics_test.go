@@ -64,3 +64,29 @@ func TestMetrics_AvgLatency(t *testing.T) {
 		t.Errorf("expected avg 200ms, got %v", avg)
 	}
 }
+
+func TestMetrics_MinMax(t *testing.T) {
+	m := bench.NewMetrics("http://ep")
+	m.Record(50*time.Millisecond, false)
+	m.Record(200*time.Millisecond, false)
+	m.Record(100*time.Millisecond, false)
+	m.Finish()
+	s := m.Summarize()
+	if s.Min != 50*time.Millisecond {
+		t.Errorf("expected min 50ms, got %v", s.Min)
+	}
+	if s.Max != 200*time.Millisecond {
+		t.Errorf("expected max 200ms, got %v", s.Max)
+	}
+}
+
+func TestMetrics_Scenario(t *testing.T) {
+	m := bench.NewMetrics("http://ep")
+	m.Scenario = "balance"
+	m.Record(10*time.Millisecond, false)
+	m.Finish()
+	s := m.Summarize()
+	if s.Scenario != "balance" {
+		t.Errorf("expected scenario 'balance', got %q", s.Scenario)
+	}
+}
