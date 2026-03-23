@@ -114,6 +114,7 @@ func Run(ctx context.Context, ds *dataset.Dataset, epA, epB string, maxTxPerAcco
 	}
 
 	// Build a lookup: address → list of block numbers from dataset transactions.
+	// Used as fallback when Account.Transactions is not populated (older datasets).
 	addrBlocks := make(map[string][]int64)
 	for _, tx := range ds.Transactions {
 		addrBlocks[strings.ToLower(tx.From)] = append(addrBlocks[strings.ToLower(tx.From)], tx.BlockNumber)
@@ -131,7 +132,22 @@ func Run(ctx context.Context, ds *dataset.Dataset, epA, epB string, maxTxPerAcco
 	// 1. Account dimension: eth_getBalance + eth_getTransactionCount
 	for _, account := range ds.Accounts {
 		addr := account.Address
-		blockNums := addrBlocks[strings.ToLower(addr)]
+
+		// Prefer per-account transactions stored in the dataset; fall back to
+		// deriving block numbers from the global transaction list.
+		var blockNums []int64
+		if len(account.Transactions) > 0 {
+			seen := make(map[int64]bool)
+			for _, tx := range account.Transactions {
+				if !seen[tx.BlockNumber] {
+					seen[tx.BlockNumber] = true
+					blockNums = append(blockNums, tx.BlockNumber)
+				}
+			}
+		} else {
+			blockNums = addrBlocks[strings.ToLower(addr)]
+		}
+
 		if maxTxPerAccount > 0 && len(blockNums) > maxTxPerAccount {
 			blockNums = blockNums[:maxTxPerAccount]
 		}

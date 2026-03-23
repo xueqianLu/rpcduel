@@ -70,12 +70,15 @@ func (s *ChainScanner) LatestBlockNumber(ctx context.Context) (int64, error) {
 // concurrency goroutines in parallel and collects up to maxBlocks blocks
 // (those with at least one transaction), up to maxTxs transactions, and up
 // to maxAccounts unique accounts (sorted by observed tx count descending).
+// maxTxPerAccount limits the number of transactions stored per account in
+// Account.Transactions (0 = unlimited).
 // Scanning stops early once all three limits are satisfied.
 // If concurrency is <= 0 it defaults to 1.
 func (s *ChainScanner) Scan(
 	ctx context.Context,
 	fromBlock, toBlock int64,
 	maxAccounts, maxTxs, maxBlocks int,
+	maxTxPerAccount int,
 	concurrency int,
 ) ([]Account, []Transaction, []Block, error) {
 	if concurrency <= 0 {
@@ -148,6 +151,7 @@ func (s *ChainScanner) Scan(
 
 	// Collect results in the main goroutine (no lock needed).
 	addrTxCount := make(map[string]int64)
+	addrTxs := make(map[string][]Transaction) // per-account transaction list
 	seenTxs := make(map[string]bool)
 	var txs []Transaction
 	var blocks []Block
@@ -186,19 +190,31 @@ func (s *ChainScanner) Scan(
 					toAddr = *tx.To
 				}
 
+				rec := Transaction{
+					Hash:        tx.Hash,
+					BlockNumber: blockNum,
+					From:        tx.From,
+					To:          toAddr,
+				}
+
 				if len(txs) < maxTxs {
-					txs = append(txs, Transaction{
-						Hash:        tx.Hash,
-						BlockNumber: blockNum,
-						From:        tx.From,
-						To:          toAddr,
-					})
+					txs = append(txs, rec)
 				}
 
 				// Always track account tx counts regardless of txs limit.
 				addrTxCount[tx.From]++
 				if toAddr != "" {
 					addrTxCount[toAddr]++
+				}
+
+				// Store per-account transactions up to maxTxPerAccount.
+				if maxTxPerAccount == 0 || len(addrTxs[tx.From]) < maxTxPerAccount {
+					addrTxs[tx.From] = append(addrTxs[tx.From], rec)
+				}
+				if toAddr != "" {
+					if maxTxPerAccount == 0 || len(addrTxs[toAddr]) < maxTxPerAccount {
+						addrTxs[toAddr] = append(addrTxs[toAddr], rec)
+					}
 				}
 			}
 		}
@@ -214,15 +230,20 @@ func (s *ChainScanner) Scan(
 	for range results {
 	}
 
-	return buildAccounts(addrTxCount, maxAccounts), txs, blocks, firstErr
+	return buildAccounts(addrTxCount, addrTxs, maxAccounts), txs, blocks, firstErr
 }
 
 // buildAccounts converts the address→txCount map into a slice sorted by
 // observed tx count (descending), trimmed to at most limit entries.
-func buildAccounts(counts map[string]int64, limit int) []Account {
+// addrTxs provides the per-account transaction list stored in Account.Transactions.
+func buildAccounts(counts map[string]int64, addrTxs map[string][]Transaction, limit int) []Account {
 	accounts := make([]Account, 0, len(counts))
 	for addr, cnt := range counts {
-		accounts = append(accounts, Account{Address: addr, TxCount: cnt})
+		accounts = append(accounts, Account{
+			Address:      addr,
+			TxCount:      cnt,
+			Transactions: addrTxs[addr],
+		})
 	}
 	sort.Slice(accounts, func(i, j int) bool {
 		return accounts[i].TxCount > accounts[j].TxCount

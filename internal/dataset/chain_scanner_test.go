@@ -56,7 +56,6 @@ func TestChainScanner_LatestBlockNumber(t *testing.T) {
 		t.Errorf("expected 100, got %d", num)
 	}
 }
-
 func TestChainScanner_Scan_BasicCollection(t *testing.T) {
 	// Serve blocks 110, 109, 108 (high to low). Block 109 has no txs.
 	blocks := map[int64]map[string]interface{}{
@@ -98,7 +97,7 @@ func TestChainScanner_Scan_BasicCollection(t *testing.T) {
 	})
 
 	scanner := dataset.NewChainScanner(srv.URL)
-	accounts, txs, blks, err := scanner.Scan(context.Background(), 108, 110, 100, 100, 100, 4)
+	accounts, txs, blks, err := scanner.Scan(context.Background(), 108, 110, 100, 100, 100, 0, 4)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -141,7 +140,7 @@ func TestChainScanner_Scan_TxLimit(t *testing.T) {
 	})
 
 	scanner := dataset.NewChainScanner(srv.URL)
-	_, txs, _, err := scanner.Scan(context.Background(), 100, 100, 100, 3, 100, 1)
+	_, txs, _, err := scanner.Scan(context.Background(), 100, 100, 100, 3, 100, 0, 1)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -173,7 +172,7 @@ func TestChainScanner_Scan_BlocksDescending(t *testing.T) {
 	})
 
 	scanner := dataset.NewChainScanner(srv.URL)
-	_, _, _, err := scanner.Scan(context.Background(), 198, 200, 100, 100, 100, 1)
+	_, _, _, err := scanner.Scan(context.Background(), 198, 200, 100, 100, 100, 0, 1)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -203,7 +202,7 @@ func TestChainScanner_Scan_AccountsSortedByTxCount(t *testing.T) {
 	})
 
 	scanner := dataset.NewChainScanner(srv.URL)
-	accounts, _, _, err := scanner.Scan(context.Background(), 100, 100, 100, 100, 100, 4)
+	accounts, _, _, err := scanner.Scan(context.Background(), 100, 100, 100, 100, 100, 0, 4)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -236,7 +235,7 @@ func TestChainScanner_Scan_NullBlock(t *testing.T) {
 	})
 
 	scanner := dataset.NewChainScanner(srv.URL)
-	_, txs, blks, err := scanner.Scan(context.Background(), 99, 100, 100, 100, 100, 1)
+	_, txs, blks, err := scanner.Scan(context.Background(), 99, 100, 100, 100, 100, 0, 1)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -272,7 +271,7 @@ func TestChainScanner_Scan_Concurrent(t *testing.T) {
 	})
 
 	scanner := dataset.NewChainScanner(srv.URL)
-	accounts, txs, blks, err := scanner.Scan(context.Background(), 1, 10, 1000, 1000, 1000, 4)
+	accounts, txs, blks, err := scanner.Scan(context.Background(), 1, 10, 1000, 1000, 1000, 0, 4)
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
 	}
@@ -287,5 +286,89 @@ func TestChainScanner_Scan_Concurrent(t *testing.T) {
 	// 10 unique from addresses + 10 unique to addresses = 20 unique accounts.
 	if len(accounts) != 20 {
 		t.Errorf("expected 20 accounts, got %d", len(accounts))
+	}
+}
+
+func TestChainScanner_Scan_PerAccountTxs(t *testing.T) {
+	// One block with 3 transactions from the same sender.
+	// Verify that Account.Transactions is populated correctly.
+	srv := mockRPCServer(t, func(method string, params json.RawMessage) interface{} {
+		if method != "eth_getBlockByNumber" {
+			return nil
+		}
+		return map[string]interface{}{
+			"number": "0x64",
+			"transactions": []map[string]interface{}{
+				{"hash": "0xtx1", "from": "0xsender", "to": "0xrecv1"},
+				{"hash": "0xtx2", "from": "0xsender", "to": "0xrecv2"},
+				{"hash": "0xtx3", "from": "0xsender", "to": "0xrecv3"},
+			},
+		}
+	})
+
+	scanner := dataset.NewChainScanner(srv.URL)
+	accounts, _, _, err := scanner.Scan(context.Background(), 100, 100, 100, 100, 100, 0, 1)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+
+	// Find the sender account.
+	var sender *dataset.Account
+	for i := range accounts {
+		if accounts[i].Address == "0xsender" {
+			sender = &accounts[i]
+			break
+		}
+	}
+	if sender == nil {
+		t.Fatal("sender account not found")
+	}
+	// Sender appears in 3 transactions.
+	if len(sender.Transactions) != 3 {
+		t.Errorf("expected 3 transactions for sender, got %d", len(sender.Transactions))
+	}
+}
+
+func TestChainScanner_Scan_MaxTxPerAccount(t *testing.T) {
+	// One block with 5 transactions from the same sender; limit per-account to 2.
+	srv := mockRPCServer(t, func(method string, params json.RawMessage) interface{} {
+		if method != "eth_getBlockByNumber" {
+			return nil
+		}
+		return map[string]interface{}{
+			"number": "0x64",
+			"transactions": []map[string]interface{}{
+				{"hash": "0xtx1", "from": "0xsender", "to": "0xrecv1"},
+				{"hash": "0xtx2", "from": "0xsender", "to": "0xrecv2"},
+				{"hash": "0xtx3", "from": "0xsender", "to": "0xrecv3"},
+				{"hash": "0xtx4", "from": "0xsender", "to": "0xrecv4"},
+				{"hash": "0xtx5", "from": "0xsender", "to": "0xrecv5"},
+			},
+		}
+	})
+
+	scanner := dataset.NewChainScanner(srv.URL)
+	accounts, _, _, err := scanner.Scan(context.Background(), 100, 100, 100, 100, 100, 2, 1)
+	if err != nil {
+		t.Fatalf("Scan: %v", err)
+	}
+
+	var sender *dataset.Account
+	for i := range accounts {
+		if accounts[i].Address == "0xsender" {
+			sender = &accounts[i]
+			break
+		}
+	}
+	if sender == nil {
+		t.Fatal("sender account not found")
+	}
+	// Stored transactions must be capped at maxTxPerAccount=2.
+	if len(sender.Transactions) != 2 {
+		t.Errorf("expected 2 stored transactions (capped), got %d", len(sender.Transactions))
+	}
+	// But TxCount should still reflect the true count (5).
+	if sender.TxCount != 5 {
+		t.Errorf("expected TxCount=5, got %d", sender.TxCount)
 	}
 }

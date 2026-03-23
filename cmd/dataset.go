@@ -20,15 +20,16 @@ transactions, and accounts for use with diff-test and benchgen.`,
 }
 
 var (
-	datasetRPC         string
-	datasetFromBlock   int64
-	datasetToBlock     int64
-	datasetAccounts    int
-	datasetTxs         int
-	datasetBlocks      int
-	datasetOut         string
-	datasetChain       string
-	datasetConcurrency int
+	datasetRPC              string
+	datasetFromBlock        int64
+	datasetToBlock          int64
+	datasetAccounts         int
+	datasetTxs              int
+	datasetBlocks           int
+	datasetMaxTxPerAccount  int
+	datasetOut              string
+	datasetChain            string
+	datasetConcurrency      int
 )
 
 func init() {
@@ -38,6 +39,8 @@ func init() {
 	datasetCmd.Flags().IntVar(&datasetAccounts, "accounts", 1000, "Maximum number of accounts to collect")
 	datasetCmd.Flags().IntVar(&datasetTxs, "txs", 1000, "Maximum number of transactions to collect")
 	datasetCmd.Flags().IntVar(&datasetBlocks, "blocks", 1000, "Maximum number of blocks to collect")
+	datasetCmd.Flags().IntVar(&datasetMaxTxPerAccount, "max-tx-per-account", 100,
+		"Maximum transactions to store per account in the dataset (0 = unlimited)")
 	datasetCmd.Flags().StringVar(&datasetOut, "out", "dataset.json", "Output file path")
 	datasetCmd.Flags().StringVar(&datasetChain, "chain", "ethereum", "Chain name recorded in the dataset")
 	datasetCmd.Flags().IntVar(&datasetConcurrency, "concurrency", 4, "Number of goroutines used to fetch blocks from the RPC endpoint")
@@ -92,7 +95,7 @@ func runDataset(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "  collecting up to %d accounts, %d transactions, %d blocks\n",
 		datasetAccounts, datasetTxs, datasetBlocks)
 
-	accounts, txs, blocks, err := scanner.Scan(ctx, fromBlock, toBlock, datasetAccounts, datasetTxs, datasetBlocks, datasetConcurrency)
+	accounts, txs, blocks, err := scanner.Scan(ctx, fromBlock, toBlock, datasetAccounts, datasetTxs, datasetBlocks, datasetMaxTxPerAccount, datasetConcurrency)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: scan incomplete: %v\n", err)
 	}

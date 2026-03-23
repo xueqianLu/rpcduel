@@ -31,7 +31,7 @@ It collects real on-chain data, runs response-consistency tests across multiple 
 | **Response diffing** | Deep JSON comparison with hex/decimal normalisation, field ignoring, and order-insensitive array comparison |
 | **Benchmarking** | Concurrent load generation with QPS, avg/P95/P99 latency and error-rate reporting |
 | **Duel mode** | Run diff and bench simultaneously against two endpoints |
-| **On-chain dataset collection** | Scan a block range (high → low) via an Ethereum JSON-RPC endpoint using multiple concurrent goroutines and collect blocks, transactions, and accounts ranked by activity |
+| **On-chain dataset collection** | Scan a block range (high → low) via an Ethereum JSON-RPC endpoint using multiple concurrent goroutines and collect blocks, transactions, and accounts ranked by activity; per-account transaction lists are stored in the dataset for efficient diff-test |
 | **Data-driven consistency tests** | Replay real chain data against two endpoints and classify every difference (`balance_mismatch`, `nonce_mismatch`, `tx_mismatch`, …) |
 | **Scenario generation** | Turn a dataset into a weighted, multi-scenario bench file ready for `bench --input` |
 | **Archive-node awareness** | `missing trie node` / `state not found` errors are detected and excluded from diff counts |
@@ -201,6 +201,7 @@ rpcduel dataset [flags]
 | `--accounts` | `1000` | Max accounts to collect (sorted by observed tx count) |
 | `--txs` | `1000` | Max transactions to collect |
 | `--blocks` | `1000` | Max non-empty blocks to collect |
+| `--max-tx-per-account` | `100` | Max transactions stored per account in the dataset (0 = unlimited) |
 | `--concurrency` | `4` | Number of goroutines used to fetch blocks from the RPC endpoint |
 | `--chain` | `ethereum` | Chain name written to dataset metadata |
 | `--out` | `dataset.json` | Output file path |
@@ -220,6 +221,10 @@ rpcduel dataset \
 ```
 
 Scanning stops early once all three collection limits (`--accounts`, `--txs`, `--blocks`) are satisfied. When `--to-block` is omitted, the current chain head is resolved automatically via `eth_blockNumber`.
+
+Per-account transaction lists (up to `--max-tx-per-account` entries each) are embedded directly in each account record. This allows `diff-test` to query historical account state at the correct block numbers without re-fetching transaction lists at test time.
+
+The exported JSON is deterministically ordered: accounts by tx count (descending), blocks by number (descending), and transactions by block number (ascending).
 
 ---
 
@@ -241,6 +246,7 @@ rpcduel diff-test [flags]
 | `--ignore-field` | | Field name(s) to skip in comparison |
 | `--timeout` | `30s` | Per-request timeout |
 | `--output` | `text` | `text` or `json` |
+| `--report` | | Write the report to this file (in addition to stdout) |
 
 **Diff categories**
 
@@ -263,7 +269,8 @@ rpcduel diff-test \
   --rpc https://rpc-a.example.com \
   --rpc https://rpc-b.example.com \
   --max-tx-per-account 50 \
-  --output json
+  --output json \
+  --report diff-test-report.json
 ```
 
 ---
@@ -332,6 +339,7 @@ rpcduel benchgen \
 rpcduel dataset \
   --rpc https://rpc.example.com \
   --from-block 20000000 --to-block 20001000 \
+  --max-tx-per-account 100 \
   --out dataset.json
 ```
 
@@ -341,7 +349,8 @@ rpcduel dataset \
 rpcduel diff-test \
   --dataset dataset.json \
   --rpc https://node-a.example.com \
-  --rpc https://node-b.example.com
+  --rpc https://node-b.example.com \
+  --report diff-test-report.json
 ```
 
 **Step 3 — Generate load-test scenarios**
@@ -443,7 +452,18 @@ Endpoint:   https://rpc.example.com
     "to": 20001000
   },
   "accounts": [
-    { "address": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", "tx_count": 1234 }
+    {
+      "address": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+      "tx_count": 1234,
+      "transactions": [
+        {
+          "hash": "0xabc123…",
+          "block_number": 20000500,
+          "from": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+          "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+        }
+      ]
+    }
   ],
   "transactions": [
     {
@@ -454,10 +474,21 @@ Endpoint:   https://rpc.example.com
     }
   ],
   "blocks": [
-    { "number": 20000500, "tx_count": 142 }
+    { "number": 20001000, "tx_count": 142 },
+    { "number": 20000500, "tx_count": 87 }
   ]
 }
 ```
+
+**Sort order (applied automatically when saving):**
+
+| Section | Order |
+|---|---|
+| `accounts` | `tx_count` descending (most active first) |
+| `blocks` | `number` descending (newest first) |
+| `transactions` | `block_number` ascending (chronological) |
+
+Each account record includes a `transactions` list (up to `--max-tx-per-account` entries) containing the transactions that account participated in during the scan range. `diff-test` uses these stored block numbers to query historical state without re-fetching transaction data from the RPC node.
 
 ---
 

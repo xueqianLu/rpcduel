@@ -1,10 +1,12 @@
 package replay_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/xueqianLu/rpcduel/internal/dataset"
@@ -180,5 +182,89 @@ func TestRun_SuccessRate(t *testing.T) {
 	}
 	if result.SuccessRate() < 0.99 {
 		t.Errorf("expected success rate ~1.0, got %f", result.SuccessRate())
+	}
+}
+
+func TestRun_UsesPerAccountTxs(t *testing.T) {
+	// Account has Transactions populated; Run should use those block numbers
+	// instead of deriving them from the global ds.Transactions list.
+	// We set a block number in account.Transactions that doesn't appear in
+	// ds.Transactions to confirm the per-account list is used.
+	srv := makeEchoServer(t, "0x1")
+
+	ds := &dataset.Dataset{
+		Accounts: []dataset.Account{
+			{
+				Address: "0xabc",
+				TxCount: 1,
+				Transactions: []dataset.Transaction{
+					{Hash: "0xtx99", BlockNumber: 999, From: "0xabc", To: "0xdef"},
+				},
+			},
+		},
+		// Global list has a different block; per-account list should take priority.
+		Transactions: []dataset.Transaction{
+			{Hash: "0xtx1", BlockNumber: 1, From: "0xabc", To: "0xdef"},
+		},
+	}
+
+	opts := diff.DefaultOptions()
+	result, err := replay.Run(context.Background(), ds, srv.URL, srv.URL, 10, 4, opts)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// Same server on both sides → no diffs regardless; just verify it runs.
+	if len(result.Diffs) != 0 {
+		t.Errorf("expected 0 diffs, got %d", len(result.Diffs))
+	}
+	// 2 requests for account (getBalance + getTransactionCount at block 999)
+	// 2 requests for global tx (getTransactionByHash + getTransactionReceipt)
+	// = 4 total
+	if result.TotalRequests != 4 {
+		t.Errorf("expected 4 total requests, got %d", result.TotalRequests)
+	}
+}
+
+func TestPrintResult_Text(t *testing.T) {
+	r := &replay.Result{
+		AccountsTested:     5,
+		TransactionsTested: 10,
+		BlocksTested:       3,
+		TotalRequests:      50,
+		SuccessRequests:    48,
+		Unsupported:        1,
+		Diffs: []replay.FoundDiff{
+			{Category: replay.CategoryBalance, Method: "eth_getBalance", Detail: "mismatch"},
+		},
+	}
+	var buf bytes.Buffer
+	replay.PrintResult(&buf, r)
+	out := buf.String()
+	if !strings.Contains(out, "Accounts tested:") {
+		t.Error("expected 'Accounts tested:' in text output")
+	}
+	if !strings.Contains(out, "balance_mismatch") {
+		t.Error("expected 'balance_mismatch' in text output")
+	}
+}
+
+func TestPrintResultJSON_ContainsFields(t *testing.T) {
+	r := &replay.Result{
+		AccountsTested:     2,
+		TransactionsTested: 3,
+		BlocksTested:       1,
+		TotalRequests:      10,
+		SuccessRequests:    10,
+	}
+	var buf bytes.Buffer
+	replay.PrintResultJSON(&buf, r)
+	var out map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
+		t.Fatalf("PrintResultJSON produced invalid JSON: %v", err)
+	}
+	for _, key := range []string{"accounts_tested", "transactions_tested", "blocks_tested", "total_requests", "success_rate"} {
+		if _, ok := out[key]; !ok {
+			t.Errorf("expected key %q in JSON output", key)
+		}
 	}
 }

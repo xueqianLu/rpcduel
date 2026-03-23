@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -29,6 +30,7 @@ var (
 	diffTestIgnoreFields    []string
 	diffTestTimeout         time.Duration
 	diffTestConcurrency     int
+	diffTestReport          string
 )
 
 func init() {
@@ -41,6 +43,7 @@ func init() {
 		"JSON field names to ignore in comparison")
 	diffTestCmd.Flags().DurationVar(&diffTestTimeout, "timeout", 30*time.Second, "Per-request timeout")
 	diffTestCmd.Flags().IntVar(&diffTestConcurrency, "concurrency", 4, "Number of goroutines used to execute RPC calls")
+	diffTestCmd.Flags().StringVar(&diffTestReport, "report", "", "Write the report to this file (in addition to stdout)")
 }
 
 func runDiffTest(cmd *cobra.Command, args []string) error {
@@ -67,10 +70,27 @@ func runDiffTest(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("diff-test: %w", err)
 	}
 
-	if diffTestOutput == "json" {
-		replay.PrintResultJSON(os.Stdout, result)
-	} else {
-		replay.PrintResult(os.Stdout, result)
+	// Write to stdout.
+	printResult(os.Stdout, result, diffTestOutput)
+
+	// Write to report file if requested.
+	if diffTestReport != "" {
+		f, err := os.Create(diffTestReport)
+		if err != nil {
+			return fmt.Errorf("create report file: %w", err)
+		}
+		defer f.Close()
+		printResult(f, result, diffTestOutput)
+		fmt.Fprintf(os.Stderr, "Report written to %s\n", diffTestReport)
 	}
 	return nil
+}
+
+// printResult writes the diff-test result to w in the requested format.
+func printResult(w io.Writer, result *replay.Result, format string) {
+	if format == "json" {
+		replay.PrintResultJSON(w, result)
+	} else {
+		replay.PrintResult(w, result)
+	}
 }
