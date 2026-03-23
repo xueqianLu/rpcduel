@@ -14,7 +14,7 @@ var rootCmd = &cobra.Command{
   - Comparing responses from multiple Ethereum JSON-RPC nodes (diff)
   - Benchmarking RPC node performance (bench)
   - Running concurrent diff+benchmark tests (duel)
-  - Collecting on-chain test datasets from Blockscout (dataset)
+  - Collecting on-chain test datasets by scanning a block range via RPC (dataset)
   - Data-driven consistency testing across nodes (diff-test)
   - Generating benchmark scenario files from datasets (benchgen)`,
 }

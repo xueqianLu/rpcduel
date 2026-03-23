@@ -31,7 +31,7 @@ It collects real on-chain data, runs response-consistency tests across multiple 
 | **Response diffing** | Deep JSON comparison with hex/decimal normalisation, field ignoring, and order-insensitive array comparison |
 | **Benchmarking** | Concurrent load generation with QPS, avg/P95/P99 latency and error-rate reporting |
 | **Duel mode** | Run diff and bench simultaneously against two endpoints |
-| **On-chain dataset collection** | Fetch top accounts, transactions, and blocks from a Blockscout REST API with pagination, retry, and rate limiting |
+| **On-chain dataset collection** | Scan a block range (high → low) via an Ethereum JSON-RPC endpoint and collect blocks, transactions, and accounts ranked by activity |
 | **Data-driven consistency tests** | Replay real chain data against two endpoints and classify every difference (`balance_mismatch`, `nonce_mismatch`, `tx_mismatch`, …) |
 | **Scenario generation** | Turn a dataset into a weighted, multi-scenario bench file ready for `bench --input` |
 | **Archive-node awareness** | `missing trie node` / `state not found` errors are detected and excluded from diff counts |
@@ -185,7 +185,9 @@ rpcduel duel \
 
 ### `dataset`
 
-Collect a representative set of on-chain accounts, transactions, and blocks from a **Blockscout** REST API and save them to a JSON file for use with `diff-test` and `benchgen`.
+Scan a block range **from high to low** via an Ethereum JSON-RPC endpoint and save a representative set of blocks, transactions, and accounts to a JSON file for use with `diff-test` and `benchgen`.
+
+The scanner calls `eth_getBlockByNumber` (with full transaction objects) for every block in the range, collects non-empty blocks, extracts transactions, and ranks all addresses by the number of times they appear — all without requiring an external explorer.
 
 ```
 rpcduel dataset [flags]
@@ -193,22 +195,20 @@ rpcduel dataset [flags]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--blockscout` | _(required)_ | Blockscout base URL |
-| `--rpc` | | RPC endpoint (reserved for future data enrichment) |
-| `--from-block` | `0` | Lower block bound (0 = no limit) |
-| `--to-block` | `0` | Upper block bound (0 = no limit) |
-| `--accounts` | `1000` | Max accounts to collect (sorted by tx count) |
+| `--rpc` | _(required)_ | Ethereum JSON-RPC endpoint URL |
+| `--from-block` | `0` | Start block, inclusive (0 = `toBlock − blocks×10`) |
+| `--to-block` | `0` | End block, inclusive (0 = current chain head) |
+| `--accounts` | `1000` | Max accounts to collect (sorted by observed tx count) |
 | `--txs` | `1000` | Max transactions to collect |
 | `--blocks` | `1000` | Max non-empty blocks to collect |
 | `--chain` | `ethereum` | Chain name written to dataset metadata |
-| `--rate-limit` | `5` | Max Blockscout API requests per second |
 | `--out` | `dataset.json` | Output file path |
 
 **Example**
 
 ```bash
 rpcduel dataset \
-  --blockscout https://eth.blockscout.com \
+  --rpc https://rpc.example.com \
   --from-block 20000000 \
   --to-block 20001000 \
   --accounts 500 \
@@ -218,7 +218,7 @@ rpcduel dataset \
   --out mainnet-dataset.json
 ```
 
-The client automatically handles Blockscout pagination, exponential-backoff retries, and rate limiting.
+Scanning stops early once all three collection limits (`--accounts`, `--txs`, `--blocks`) are satisfied. When `--to-block` is omitted, the current chain head is resolved automatically via `eth_blockNumber`.
 
 ---
 
@@ -307,9 +307,9 @@ rpcduel benchgen \
 ## Data-Driven Testing Workflow
 
 ```
-                  Blockscout REST API
+              Ethereum JSON-RPC endpoint
                          │
-              rpcduel dataset --blockscout …
+              rpcduel dataset --rpc …
                          │
                    dataset.json
                     ┌────┴────┐
@@ -328,7 +328,7 @@ rpcduel benchgen \
 
 ```bash
 rpcduel dataset \
-  --blockscout https://eth.blockscout.com \
+  --rpc https://rpc.example.com \
   --from-block 20000000 --to-block 20001000 \
   --out dataset.json
 ```
@@ -433,7 +433,7 @@ Endpoint:   https://rpc.example.com
 {
   "meta": {
     "chain": "ethereum",
-    "blockscout": "https://eth.blockscout.com",
+    "rpc": "https://rpc.example.com",
     "generated_at": "2026-03-23T06:00:00Z"
   },
   "range": {
@@ -500,7 +500,7 @@ rpcduel/
     ├── bench/            Metrics collection (QPS, percentiles, error rate)
     ├── runner/           Concurrent worker pools (fixed count, duration, paired)
     ├── report/           Text & JSON report rendering
-    ├── dataset/          Dataset types + Blockscout REST client
+    ├── dataset/          Dataset types + Ethereum JSON-RPC chain scanner
     ├── benchgen/         Scenario generation & weighted request sampling
     └── replay/           Data-driven diff-test engine
 ```
