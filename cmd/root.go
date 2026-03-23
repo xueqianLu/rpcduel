@@ -13,7 +13,10 @@ var rootCmd = &cobra.Command{
 	Long: `rpcduel is a high-performance CLI tool for:
   - Comparing responses from multiple Ethereum JSON-RPC nodes (diff)
   - Benchmarking RPC node performance (bench)
-  - Running concurrent diff+benchmark tests (duel)`,
+  - Running concurrent diff+benchmark tests (duel)
+  - Collecting on-chain test datasets from Blockscout (dataset)
+  - Data-driven consistency testing across nodes (diff-test)
+  - Generating benchmark scenario files from datasets (benchgen)`,
 }
 
 // Execute runs the root command.
@@ -28,4 +31,7 @@ func init() {
 	rootCmd.AddCommand(diffCmd)
 	rootCmd.AddCommand(benchCmd)
 	rootCmd.AddCommand(duelCmd)
+	rootCmd.AddCommand(datasetCmd)
+	rootCmd.AddCommand(diffTestCmd)
+	rootCmd.AddCommand(benchgenCmd)
 }
