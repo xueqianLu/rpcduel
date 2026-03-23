@@ -5,6 +5,7 @@ package replay
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,10 @@ import (
 	"github.com/xueqianLu/rpcduel/internal/diff"
 	"github.com/xueqianLu/rpcduel/internal/rpc"
 )
+
+// progressInterval is the number of completed tasks between progress log lines.
+// A final line is always emitted when all tasks have finished.
+const progressInterval = 100
 
 // DiffCategory classifies the kind of mismatch.
 type DiffCategory string
@@ -98,7 +103,9 @@ type Config struct {
 
 // Run executes the full diff-test suite against ds using concurrency goroutines.
 // If concurrency is <= 0 it defaults to 1.
-func Run(ctx context.Context, ds *dataset.Dataset, epA, epB string, maxTxPerAccount int, concurrency int, opts diff.Options) (*Result, error) {
+// progress, if non-nil, receives periodic one-line status updates written as
+// each batch of tasks completes (every progressInterval tasks and at the end).
+func Run(ctx context.Context, ds *dataset.Dataset, epA, epB string, maxTxPerAccount int, concurrency int, opts diff.Options, progress io.Writer) (*Result, error) {
 	if concurrency <= 0 {
 		concurrency = 1
 	}
@@ -204,12 +211,19 @@ func Run(ctx context.Context, ds *dataset.Dataset, epA, epB string, maxTxPerAcco
 		close(outCh)
 	}()
 
+	total := len(tasks)
+	done := 0
 	for out := range outCh {
+		done++
 		result.TotalRequests += out.totalReqs
 		result.SuccessRequests += out.successReqs
 		result.Unsupported += out.unsupported
 		if out.diff != nil {
 			result.Diffs = append(result.Diffs, *out.diff)
+		}
+		if progress != nil && total > 0 && (done == total || (done > 0 && done%progressInterval == 0)) {
+			pct := float64(done) / float64(total) * 100
+			fmt.Fprintf(progress, "Progress: %d/%d tasks (%.1f%%)\n", done, total, pct)
 		}
 	}
 
@@ -298,6 +312,29 @@ func isNull(resp *rpc.Response) bool {
 
 // maxSampleDiffs is the maximum number of sample diffs included in reports.
 const maxSampleDiffs = 10
+
+// WriteResultCSV writes all discovered diffs to w as a CSV file.
+// The CSV has four columns: category, method, params, detail.
+// The first row is a header.  Returns the first encoding or flush error.
+func WriteResultCSV(w io.Writer, r *Result) error {
+	cw := csv.NewWriter(w)
+	if err := cw.Write([]string{"category", "method", "params", "detail"}); err != nil {
+		return err
+	}
+	for _, d := range r.Diffs {
+		params, _ := json.Marshal(d.Params)
+		if err := cw.Write([]string{
+			string(d.Category),
+			d.Method,
+			string(params),
+			d.Detail,
+		}); err != nil {
+			return err
+		}
+	}
+	cw.Flush()
+	return cw.Error()
+}
 
 // PrintResult writes a human-readable diff-test summary.
 func PrintResult(w io.Writer, r *Result) {

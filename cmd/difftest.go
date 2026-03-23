@@ -31,6 +31,7 @@ var (
 	diffTestTimeout         time.Duration
 	diffTestConcurrency     int
 	diffTestReport          string
+	diffTestCSV             string
 )
 
 func init() {
@@ -44,6 +45,7 @@ func init() {
 	diffTestCmd.Flags().DurationVar(&diffTestTimeout, "timeout", 30*time.Second, "Per-request timeout")
 	diffTestCmd.Flags().IntVar(&diffTestConcurrency, "concurrency", 4, "Number of goroutines used to execute RPC calls")
 	diffTestCmd.Flags().StringVar(&diffTestReport, "report", "", "Write the report to this file (in addition to stdout)")
+	diffTestCmd.Flags().StringVar(&diffTestCSV, "csv", "", "Write a CSV report of all diffs to this file")
 }
 
 func runDiffTest(cmd *cobra.Command, args []string) error {
@@ -65,7 +67,7 @@ func runDiffTest(cmd *cobra.Command, args []string) error {
 		len(ds.Accounts), len(ds.Transactions), len(ds.Blocks))
 
 	ctx := context.Background()
-	result, err := replay.Run(ctx, ds, diffTestRPCs[0], diffTestRPCs[1], diffTestMaxTxPerAccount, diffTestConcurrency, opts)
+	result, err := replay.Run(ctx, ds, diffTestRPCs[0], diffTestRPCs[1], diffTestMaxTxPerAccount, diffTestConcurrency, opts, os.Stderr)
 	if err != nil {
 		return fmt.Errorf("diff-test: %w", err)
 	}
@@ -82,6 +84,19 @@ func runDiffTest(cmd *cobra.Command, args []string) error {
 		defer f.Close()
 		printResult(f, result, diffTestOutput)
 		fmt.Fprintf(os.Stderr, "Report written to %s\n", diffTestReport)
+	}
+
+	// Write CSV diff report if requested.
+	if diffTestCSV != "" {
+		f, err := os.Create(diffTestCSV)
+		if err != nil {
+			return fmt.Errorf("create CSV report file: %w", err)
+		}
+		defer f.Close()
+		if err := replay.WriteResultCSV(f, result); err != nil {
+			return fmt.Errorf("write CSV report: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "CSV report written to %s\n", diffTestCSV)
 	}
 	return nil
 }

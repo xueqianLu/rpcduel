@@ -42,7 +42,7 @@ func TestRun_NoDiffs(t *testing.T) {
 	}
 
 	opts := diff.DefaultOptions()
-	result, err := replay.Run(context.Background(), ds, srv.URL, srv.URL, 10, 4, opts)
+	result, err := replay.Run(context.Background(), ds, srv.URL, srv.URL, 10, 4, opts, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestRun_WithDiffs(t *testing.T) {
 	}
 
 	opts := diff.DefaultOptions()
-	result, err := replay.Run(context.Background(), ds, srvA.URL, srvB.URL, 10, 4, opts)
+	result, err := replay.Run(context.Background(), ds, srvA.URL, srvB.URL, 10, 4, opts, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestRun_ArchiveNodeError(t *testing.T) {
 	}
 
 	opts := diff.DefaultOptions()
-	result, err := replay.Run(context.Background(), ds, srvA.URL, srvErr.URL, 10, 4, opts)
+	result, err := replay.Run(context.Background(), ds, srvA.URL, srvErr.URL, 10, 4, opts, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestRun_TxCategory(t *testing.T) {
 	}
 
 	opts := diff.DefaultOptions()
-	result, err := replay.Run(context.Background(), ds, srvA.URL, srvB.URL, 10, 4, opts)
+	result, err := replay.Run(context.Background(), ds, srvA.URL, srvB.URL, 10, 4, opts, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestRun_SuccessRate(t *testing.T) {
 	}
 
 	opts := diff.DefaultOptions()
-	result, err := replay.Run(context.Background(), ds, srv.URL, srv.URL, 10, 4, opts)
+	result, err := replay.Run(context.Background(), ds, srv.URL, srv.URL, 10, 4, opts, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestRun_UsesPerAccountTxs(t *testing.T) {
 	}
 
 	opts := diff.DefaultOptions()
-	result, err := replay.Run(context.Background(), ds, srv.URL, srv.URL, 10, 4, opts)
+	result, err := replay.Run(context.Background(), ds, srv.URL, srv.URL, 10, 4, opts, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -266,5 +266,71 @@ func TestPrintResultJSON_ContainsFields(t *testing.T) {
 		if _, ok := out[key]; !ok {
 			t.Errorf("expected key %q in JSON output", key)
 		}
+	}
+}
+
+func TestRun_Progress(t *testing.T) {
+	// Run with a progress writer and verify at least one progress line is emitted.
+	srv := makeEchoServer(t, "0x1")
+
+	ds := &dataset.Dataset{
+		Accounts: []dataset.Account{{Address: "0xabc", TxCount: 1}},
+	}
+
+	opts := diff.DefaultOptions()
+	var progBuf bytes.Buffer
+	_, err := replay.Run(context.Background(), ds, srv.URL, srv.URL, 10, 4, opts, &progBuf)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	out := progBuf.String()
+	if !strings.Contains(out, "Progress:") {
+		t.Errorf("expected at least one progress line, got: %q", out)
+	}
+	if !strings.Contains(out, "100.0%") {
+		t.Errorf("expected final 100%% progress line, got: %q", out)
+	}
+}
+
+func TestWriteResultCSV(t *testing.T) {
+	r := &replay.Result{
+		Diffs: []replay.FoundDiff{
+			{Category: replay.CategoryBalance, Method: "eth_getBalance", Params: []interface{}{"0xabc", "0xa"}, Detail: "value mismatch"},
+			{Category: replay.CategoryTx, Method: "eth_getTransactionByHash", Params: []interface{}{"0xtx1"}, Detail: "missing"},
+		},
+	}
+	var buf bytes.Buffer
+	if err := replay.WriteResultCSV(&buf, r); err != nil {
+		t.Fatalf("WriteResultCSV: %v", err)
+	}
+	out := buf.String()
+	// Must have a header row.
+	if !strings.Contains(out, "category,method,params,detail") {
+		t.Errorf("missing CSV header, got:\n%s", out)
+	}
+	// Must contain both diff rows.
+	if !strings.Contains(out, "balance_mismatch") {
+		t.Errorf("expected balance_mismatch row in CSV, got:\n%s", out)
+	}
+	if !strings.Contains(out, "tx_mismatch") {
+		t.Errorf("expected tx_mismatch row in CSV, got:\n%s", out)
+	}
+	// Verify line count: 1 header + 2 data = 3 lines (plus possible trailing newline).
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	if len(lines) != 3 {
+		t.Errorf("expected 3 CSV lines (header+2 diffs), got %d:\n%s", len(lines), out)
+	}
+}
+
+func TestWriteResultCSV_Empty(t *testing.T) {
+	r := &replay.Result{}
+	var buf bytes.Buffer
+	if err := replay.WriteResultCSV(&buf, r); err != nil {
+		t.Fatalf("WriteResultCSV: %v", err)
+	}
+	// Should still have a header row.
+	out := strings.TrimSpace(buf.String())
+	if out != "category,method,params,detail" {
+		t.Errorf("expected only header for empty result, got: %q", out)
 	}
 }

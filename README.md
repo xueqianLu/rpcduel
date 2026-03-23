@@ -247,6 +247,16 @@ rpcduel diff-test [flags]
 | `--timeout` | `30s` | Per-request timeout |
 | `--output` | `text` | `text` or `json` |
 | `--report` | | Write the report to this file (in addition to stdout) |
+| `--csv` | | Write a CSV diff report (category, method, params, detail) to this file |
+
+**Progress** is printed to stderr automatically as tasks complete — one line every 100 tasks and a final line at 100%.  Example:
+
+```
+Progress: 100/1000 tasks (10.0%)
+Progress: 200/1000 tasks (20.0%)
+...
+Progress: 1000/1000 tasks (100.0%)
+```
 
 **Diff categories**
 
@@ -270,7 +280,8 @@ rpcduel diff-test \
   --rpc https://rpc-b.example.com \
   --max-tx-per-account 50 \
   --output json \
-  --report diff-test-report.json
+  --report diff-test-report.json \
+  --csv diff-test-report.csv
 ```
 
 ---
@@ -350,8 +361,11 @@ rpcduel diff-test \
   --dataset dataset.json \
   --rpc https://node-a.example.com \
   --rpc https://node-b.example.com \
-  --report diff-test-report.json
+  --report diff-test-report.json \
+  --csv diff-test-report.csv
 ```
+
+Progress is printed to stderr as tasks complete. When finished, the summary is printed to stdout (or `--report` file) and a full CSV of all diffs is written to `--csv`.
 
 **Step 3 — Generate load-test scenarios**
 
