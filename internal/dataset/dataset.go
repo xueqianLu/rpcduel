@@ -8,6 +8,13 @@ import (
 	"os"
 )
 
+// Meta holds metadata about a collected dataset.
+type Meta struct {
+	Chain       string `json:"chain"`
+	Blockscout  string `json:"blockscout"`
+	GeneratedAt string `json:"generated_at"`
+}
+
 // Account is a chain account with its observed transaction count.
 type Account struct {
 	Address string `json:"address"`
@@ -36,7 +43,7 @@ type Range struct {
 
 // Dataset is the top-level structure written to / read from a dataset file.
 type Dataset struct {
-	Chain        string        `json:"chain"`
+	Meta         Meta          `json:"meta"`
 	Range        Range         `json:"range"`
 	Accounts     []Account     `json:"accounts"`
 	Transactions []Transaction `json:"transactions"`

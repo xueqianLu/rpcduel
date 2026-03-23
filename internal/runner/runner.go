@@ -287,3 +287,52 @@ func ResultToJSON(r *rpc.Response) json.RawMessage {
 	}
 	return r.Result
 }
+
+// RunDurationFromTasks runs a pool of workers for the given duration, cycling
+// through tasks repeatedly. It is used for duration-mode bench with an input file.
+func RunDurationFromTasks(ctx context.Context, tasks []Task, concurrency int,
+	duration time.Duration, timeout time.Duration) <-chan Result {
+
+	results := make(chan Result, concurrency*2)
+	if len(tasks) == 0 {
+		close(results)
+		return results
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		// Stagger each worker's starting position through the task list so
+		// that workers don't all start from index 0 and repeat the same
+		// requests. The modulo handles the case where concurrency > len(tasks).
+		startIdx := i % len(tasks)
+		go func(idx int) {
+			defer wg.Done()
+			deadline := time.Now().Add(duration)
+			for time.Now().Before(deadline) {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				task := tasks[idx%len(tasks)]
+				c := rpc.NewClient(task.Endpoint, timeout)
+				resp, lat, err := c.Call(ctx, task.Method, task.Params)
+				results <- Result{
+					Endpoint: task.Endpoint,
+					Response: resp,
+					Latency:  lat,
+					Err:      err,
+				}
+				idx++
+			}
+		}(startIdx)
+	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	return results
+}

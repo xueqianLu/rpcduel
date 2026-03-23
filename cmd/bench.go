@@ -71,7 +71,19 @@ func runBench(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("load bench file: %w", err)
 		}
-		requests := bf.FlattenRequests()
+
+		// When --requests or --duration is specified, use weighted dispatch.
+		// Otherwise, run all requests from the file once (flat mode).
+		var requests []benchgen.Request
+		if benchDuration > 0 {
+			// Duration mode: build a large weighted pool and run it.
+			requests = bf.WeightedRequests(benchConcurrency*1000, nil)
+		} else if benchRequests > 0 {
+			requests = bf.WeightedRequests(benchRequests, nil)
+		} else {
+			requests = bf.FlattenRequests()
+		}
+
 		if len(requests) == 0 {
 			return fmt.Errorf("bench file contains no requests")
 		}
@@ -86,14 +98,27 @@ func runBench(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		resultCh := runner.Run(ctx, tasks, benchConcurrency, benchTimeout)
-		for res := range resultCh {
-			m := metricsMap[res.Endpoint]
-			if m == nil {
-				m = bench.NewMetrics(res.Endpoint)
-				metricsMap[res.Endpoint] = m
+		if benchDuration > 0 {
+			// For duration mode with input file, cycle through tasks.
+			taskCh := runner.RunDurationFromTasks(ctx, tasks, benchConcurrency, benchDuration, benchTimeout)
+			for res := range taskCh {
+				m := metricsMap[res.Endpoint]
+				if m == nil {
+					m = bench.NewMetrics(res.Endpoint)
+					metricsMap[res.Endpoint] = m
+				}
+				m.Record(res.Latency, res.Err != nil)
 			}
-			m.Record(res.Latency, res.Err != nil)
+		} else {
+			resultCh := runner.Run(ctx, tasks, benchConcurrency, benchTimeout)
+			for res := range resultCh {
+				m := metricsMap[res.Endpoint]
+				if m == nil {
+					m = bench.NewMetrics(res.Endpoint)
+					metricsMap[res.Endpoint] = m
+				}
+				m.Record(res.Latency, res.Err != nil)
+			}
 		}
 	} else {
 		// ----------------------------------------------------------------

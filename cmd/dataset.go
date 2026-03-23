@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/xueqianLu/rpcduel/internal/dataset"
@@ -52,7 +53,11 @@ func runDataset(cmd *cobra.Command, args []string) error {
 	client := dataset.NewBlockscoutClient(datasetBlockscout, datasetRateLimit)
 
 	ds := &dataset.Dataset{
-		Chain: datasetChain,
+		Meta: dataset.Meta{
+			Chain:       datasetChain,
+			Blockscout:  datasetBlockscout,
+			GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		},
 		Range: dataset.Range{
 			From: datasetFromBlock,
 			To:   datasetToBlock,
