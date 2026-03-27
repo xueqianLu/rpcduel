@@ -95,6 +95,21 @@ rpcduel diff \
   --ignore-field logsBloom
 
 # Load a batch of requests from a file and output JSON
+```json
+# example requests.json
+[
+  {
+    "method": "eth_getBalance",
+    "params": ["0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", "latest"]
+  },
+  {
+    "method": "eth_getTransactionCount",
+    "params": ["0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", "latest"]
+  }
+]
+```
+
+```
 rpcduel diff \
   --rpc https://rpc-a.example.com \
   --rpc https://rpc-b.example.com \
