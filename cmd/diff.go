@@ -2,142 +2,98 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/xueqianLu/rpcduel/internal/diff"
-	"github.com/xueqianLu/rpcduel/internal/report"
-	"github.com/xueqianLu/rpcduel/internal/rpc"
+	diffpkg "github.com/xueqianLu/rpcduel/internal/diff"
+	"github.com/xueqianLu/rpcduel/pkg/rpc"
 )
 
-// BatchRequest holds a JSON-RPC request from an input file.
-type BatchRequest struct {
-	Method string        `json:"method"`
-	Params []interface{} `json:"params"`
-}
+var (
+	diffTargets     []string
+	diffFromBlock   uint64
+	diffToBlock     uint64
+	diffIgnore      []string
+	diffTimeout     time.Duration
+	diffShowDetails int
+)
 
 var diffCmd = &cobra.Command{
 	Use:   "diff",
-	Short: "Compare responses from multiple RPC endpoints",
-	Long: `Send the same JSON-RPC request to multiple endpoints and compare the responses.
-Supports single requests via flags or batch requests from a JSON file.`,
-	RunE: runDiff,
-}
+	Short: "Audit semantic differences across RPC endpoints",
+	Long:  "Compare block, transaction, receipt, and account-state responses across multiple endpoints over a block range.",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if diffFromBlock > diffToBlock {
+			return fmt.Errorf("--from must be less than or equal to --to-block")
+		}
 
-var (
-	diffRPCs        []string
-	diffMethod      string
-	diffParamsStr   string
-	diffInputFile   string
-	diffRepeat      int
-	diffOutput      string
-	diffIgnoreFields []string
-	diffIgnoreOrder  bool
-	diffTimeout     time.Duration
-)
+		targets, err := resolveTargets(diffTargets)
+		if err != nil {
+			return err
+		}
+		if len(targets) < 2 {
+			return fmt.Errorf("at least two --to values are required")
+		}
+
+		endpoints := make([]diffpkg.Endpoint, 0, len(targets))
+		for _, target := range targets {
+			endpoints = append(endpoints, diffpkg.Endpoint{
+				Target:   target,
+				Provider: rpc.NewProvider(target, diffTimeout),
+			})
+		}
+
+		options := diffpkg.DefaultOptions()
+		options.IgnoreFields = diffpkg.NewIgnoreSet(diffIgnore)
+
+		auditor := diffpkg.NewAuditor(endpoints[0], endpoints[1:], options)
+		report, err := auditor.AuditBlockRange(context.Background(), diffFromBlock, diffToBlock)
+		if err != nil {
+			return err
+		}
+
+		printDiffReport(cmd, report, diffShowDetails)
+		return nil
+	},
+}
 
 func init() {
-	diffCmd.Flags().StringArrayVar(&diffRPCs, "rpc", nil, "RPC endpoint URL (can be specified multiple times, minimum 2)")
-	diffCmd.Flags().StringVar(&diffMethod, "method", "eth_blockNumber", "JSON-RPC method name")
-	diffCmd.Flags().StringVar(&diffParamsStr, "params", "[]", "JSON-encoded params array")
-	diffCmd.Flags().StringVar(&diffInputFile, "input", "", "JSON file with batch requests [{method, params}]")
-	diffCmd.Flags().IntVar(&diffRepeat, "repeat", 1, "Number of times to repeat the request")
-	diffCmd.Flags().StringVar(&diffOutput, "output", "text", "Output format: text or json")
-	diffCmd.Flags().StringArrayVar(&diffIgnoreFields, "ignore-field", nil, "JSON field names to ignore in comparison")
-	diffCmd.Flags().BoolVar(&diffIgnoreOrder, "ignore-order", false, "Treat arrays as unordered sets")
-	diffCmd.Flags().DurationVar(&diffTimeout, "timeout", 30*time.Second, "Request timeout")
+	diffCmd.Flags().StringArrayVar(&diffTargets, "to", nil, "RPC target alias or URL (first target is the baseline)")
+	diffCmd.Flags().Uint64Var(&diffFromBlock, "from", 0, "Start block (inclusive)")
+	diffCmd.Flags().Uint64Var(&diffToBlock, "to-block", 0, "End block (inclusive)")
+	diffCmd.Flags().StringArrayVar(&diffIgnore, "ignore", nil, "Field name or path to ignore during semantic diffing")
+	diffCmd.Flags().DurationVar(&diffTimeout, "timeout", 15*time.Second, "Per-request timeout")
+	diffCmd.Flags().IntVar(&diffShowDetails, "show", 20, "Maximum findings to print")
+
+	_ = diffCmd.MarkFlagRequired("to")
+	_ = diffCmd.MarkFlagRequired("to-block")
 }
 
-func runDiff(cmd *cobra.Command, args []string) error {
-	if len(diffRPCs) < 2 {
-		return fmt.Errorf("at least 2 --rpc endpoints are required")
+func printDiffReport(cmd *cobra.Command, report *diffpkg.Report, limit int) {
+	fmt.Fprintf(cmd.OutOrStdout(), "baseline: %s\n", report.Baseline)
+	fmt.Fprintf(cmd.OutOrStdout(), "targets:  %v\n", report.Targets)
+	fmt.Fprintf(cmd.OutOrStdout(), "range:    %d-%d\n", report.From, report.To)
+	fmt.Fprintf(cmd.OutOrStdout(), "checks:   %d\n", report.Checks)
+	fmt.Fprintf(cmd.OutOrStdout(), "findings: %d\n", len(report.Findings))
+
+	if len(report.Findings) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "no semantic differences detected")
+		return
 	}
 
-	// Build diff options
-	opts := diff.DefaultOptions()
-	for _, f := range diffIgnoreFields {
-		opts.IgnoreFields[f] = true
-	}
-	opts.IgnoreOrder = diffIgnoreOrder
-
-	// Load requests
-	requests, err := loadRequests()
-	if err != nil {
-		return err
+	if limit <= 0 || limit > len(report.Findings) {
+		limit = len(report.Findings)
 	}
 
-	outFmt := report.Format(diffOutput)
-	var allDiffs []diff.Difference
-	total := 0
-
-	// Compare first two endpoints
-	epA := diffRPCs[0]
-	epB := diffRPCs[1]
-
-	ctx := context.Background()
-
-	for _, req := range requests {
-		for i := 0; i < diffRepeat; i++ {
-			total++
-			cA := rpc.NewClient(epA, diffTimeout)
-			cB := rpc.NewClient(epB, diffTimeout)
-
-			respA, _, errA := cA.Call(ctx, req.Method, req.Params)
-			respB, _, errB := cB.Call(ctx, req.Method, req.Params)
-
-			if errA != nil && errB != nil {
-				// Both errored - consider equal (both failed)
-				continue
-			}
-			if errA != nil || errB != nil {
-				allDiffs = append(allDiffs, diff.Difference{
-					Path:   "$",
-					Left:   fmt.Sprintf("%v", errA),
-					Right:  fmt.Sprintf("%v", errB),
-					Reason: "one endpoint errored",
-				})
-				continue
-			}
-
-			diffs, err := diff.Compare(respA.Result, respB.Result, opts)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: compare error: %v\n", err)
-				continue
-			}
-			allDiffs = append(allDiffs, diffs...)
+	for _, finding := range report.Findings[:limit] {
+		fmt.Fprintf(cmd.OutOrStdout(), "\n[%s] %s %v\n", finding.Endpoint, finding.Method, finding.Params)
+		if finding.Error != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "  error: %s\n", finding.Error)
+			continue
+		}
+		for _, difference := range finding.Differences {
+			fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", difference)
 		}
 	}
-
-	rep := report.DiffReport{
-		Endpoints: []string{epA, epB},
-		Method:    requests[0].Method,
-		Total:     total,
-		DiffCount: len(allDiffs),
-		Diffs:     allDiffs,
-	}
-	report.PrintDiff(os.Stdout, rep, outFmt)
-	return nil
-}
-
-func loadRequests() ([]BatchRequest, error) {
-	if diffInputFile != "" {
-		data, err := os.ReadFile(diffInputFile)
-		if err != nil {
-			return nil, fmt.Errorf("read input file: %w", err)
-		}
-		var reqs []BatchRequest
-		if err := json.Unmarshal(data, &reqs); err != nil {
-			return nil, fmt.Errorf("parse input file: %w", err)
-		}
-		return reqs, nil
-	}
-
-	params, err := rpc.ParseParams(diffParamsStr)
-	if err != nil {
-		return nil, err
-	}
-	return []BatchRequest{{Method: diffMethod, Params: params}}, nil
 }

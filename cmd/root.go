@@ -1,25 +1,27 @@
 package cmd
 
 import (
+	_ "embed"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
 
+//go:embed assets/root_long.txt
+var rootLong string
+
+var providerMappings []string
+
 var rootCmd = &cobra.Command{
-	Use:   "rpcduel",
-	Short: "A CLI tool for comparing and benchmarking Ethereum JSON-RPC endpoints",
-	Long: `rpcduel is a high-performance CLI tool for:
-  - Comparing responses from multiple Ethereum JSON-RPC nodes (diff)
-  - Benchmarking RPC node performance (bench)
-  - Running concurrent diff+benchmark tests (duel)
-  - Collecting on-chain test datasets from Blockscout (dataset)
-  - Data-driven consistency testing across nodes (diff-test)
-  - Generating benchmark scenario files from datasets (benchgen)`,
+	Use:           "rpcduel",
+	Short:         "Stateless RPC audit and performance toolkit",
+	Long:          strings.TrimSpace(rootLong),
+	SilenceUsage:  true,
+	SilenceErrors: true,
 }
 
-// Execute runs the root command.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -28,10 +30,15 @@ func Execute() {
 }
 
 func init() {
+	rootCmd.PersistentFlags().StringArrayVar(
+		&providerMappings,
+		"provider",
+		nil,
+		"Provider alias mapping in the form alias=https://rpc.example",
+	)
+
+	rootCmd.AddCommand(datasetCmd)
 	rootCmd.AddCommand(diffCmd)
 	rootCmd.AddCommand(benchCmd)
-	rootCmd.AddCommand(duelCmd)
-	rootCmd.AddCommand(datasetCmd)
-	rootCmd.AddCommand(diffTestCmd)
-	rootCmd.AddCommand(benchgenCmd)
+	rootCmd.AddCommand(callCmd)
 }

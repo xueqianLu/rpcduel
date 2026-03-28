@@ -1,0 +1,8 @@
+rpcduel is a stateless RPC audit and performance toolkit for Ethereum-style
+JSON-RPC endpoints.
+
+It ships as a single binary and focuses on:
+- smart semantic diffing instead of byte-for-byte comparisons
+- human-friendly RPC calls and output formatting
+- dataset-driven benchmarking without a database
+- lightweight scaffolding that stays easy to inspect and extend
