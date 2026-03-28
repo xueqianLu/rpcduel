@@ -12,6 +12,7 @@ import (
 
 var (
 	diffTargets     []string
+	diffWorkers     int
 	diffFromBlock   uint64
 	diffToBlock     uint64
 	diffIgnore      []string
@@ -47,7 +48,7 @@ var diffCmd = &cobra.Command{
 		options := diffpkg.DefaultOptions()
 		options.IgnoreFields = diffpkg.NewIgnoreSet(diffIgnore)
 
-		auditor := diffpkg.NewAuditor(endpoints[0], endpoints[1:], options)
+		auditor := diffpkg.NewAuditor(endpoints[0], endpoints[1:], options, diffpkg.WithConcurrency(diffWorkers))
 		report, err := auditor.AuditBlockRange(context.Background(), diffFromBlock, diffToBlock)
 		if err != nil {
 			return err
@@ -60,6 +61,7 @@ var diffCmd = &cobra.Command{
 
 func init() {
 	diffCmd.Flags().StringArrayVar(&diffTargets, "to", nil, "RPC target alias or URL (first target is the baseline)")
+	diffCmd.Flags().IntVar(&diffWorkers, "concurrency", 8, "Number of concurrent block audit workers")
 	diffCmd.Flags().Uint64Var(&diffFromBlock, "from", 0, "Start block (inclusive)")
 	diffCmd.Flags().Uint64Var(&diffToBlock, "to-block", 0, "End block (inclusive)")
 	diffCmd.Flags().StringArrayVar(&diffIgnore, "ignore", nil, "Field name or path to ignore during semantic diffing")

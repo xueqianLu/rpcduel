@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/xueqianLu/rpcduel/pkg/rpc"
 )
@@ -32,17 +34,34 @@ type Report struct {
 	Findings []Finding `json:"findings"`
 }
 
+type AuditorOption func(*Auditor)
+
 type Auditor struct {
-	baseline Endpoint
-	peers    []Endpoint
-	options  Options
+	baseline    Endpoint
+	peers       []Endpoint
+	options     Options
+	concurrency int
 }
 
-func NewAuditor(baseline Endpoint, peers []Endpoint, options Options) *Auditor {
-	return &Auditor{
-		baseline: baseline,
-		peers:    peers,
-		options:  options,
+func NewAuditor(baseline Endpoint, peers []Endpoint, options Options, auditorOptions ...AuditorOption) *Auditor {
+	auditor := &Auditor{
+		baseline:    baseline,
+		peers:       peers,
+		options:     options,
+		concurrency: defaultAuditorConcurrency(),
+	}
+	for _, option := range auditorOptions {
+		option(auditor)
+	}
+	if auditor.concurrency <= 0 {
+		auditor.concurrency = 1
+	}
+	return auditor
+}
+
+func WithConcurrency(concurrency int) AuditorOption {
+	return func(auditor *Auditor) {
+		auditor.concurrency = concurrency
 	}
 }
 
@@ -60,79 +79,235 @@ func (a *Auditor) AuditBlockRange(ctx context.Context, from, to uint64) (*Report
 		report.Targets = append(report.Targets, peer.Target.Name)
 	}
 
-	for blockNumber := from; blockNumber <= to; blockNumber++ {
-		blockTag := rpc.HexBlockNumber(blockNumber)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-		blockResults := a.compareCall(ctx, report, "eth_getBlockByNumber", blockTag, false)
-		baselineBlock, ok := blockResults[a.baseline.Target.Name]
-		if !ok {
-			continue
-		}
+	jobs := make(chan uint64)
+	concurrency := minInt(a.concurrency, int(to-from+1))
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	results := make(chan blockAuditResult, concurrency)
 
-		txHashes := make(map[string]struct{})
-		addresses := make(map[string]struct{})
-		collectBlockReferences(baselineBlock, txHashes, addresses)
-
-		for _, txHash := range sortedKeys(txHashes) {
-			transactionResults := a.compareCall(ctx, report, "eth_getTransactionByHash", txHash)
-			if baselineTransaction, ok := transactionResults[a.baseline.Target.Name]; ok {
-				collectTransactionAddresses(baselineTransaction, addresses)
+	var workerGroup sync.WaitGroup
+	for worker := 0; worker < concurrency; worker++ {
+		workerGroup.Add(1)
+		go func() {
+			defer workerGroup.Done()
+			for blockNumber := range jobs {
+				result := a.auditBlock(ctx, blockNumber)
+				select {
+				case results <- result:
+				case <-ctx.Done():
+					return
+				}
+				if result.err != nil {
+					return
+				}
 			}
-			a.compareCall(ctx, report, "eth_getTransactionReceipt", txHash)
-		}
-
-		stateTags := []string{blockTag}
-		if previous, ok := rpc.PreviousBlockTag(blockNumber); ok {
-			stateTags = append(stateTags, previous)
-		}
-
-		for _, address := range sortedKeys(addresses) {
-			for _, tag := range stateTags {
-				a.compareCall(ctx, report, "eth_getBalance", address, tag)
-				a.compareCall(ctx, report, "eth_getTransactionCount", address, tag)
-			}
-		}
+		}()
 	}
 
+	go func() {
+		defer close(jobs)
+		for blockNumber := from; ; blockNumber++ {
+			select {
+			case jobs <- blockNumber:
+			case <-ctx.Done():
+				return
+			}
+			if blockNumber == to {
+				return
+			}
+		}
+	}()
+
+	go func() {
+		workerGroup.Wait()
+		close(results)
+	}()
+
+	var firstErr error
+	for result := range results {
+		if result.err != nil {
+			if firstErr == nil {
+				firstErr = result.err
+				cancel()
+			}
+			continue
+		}
+		report.Checks += result.checks
+		report.Findings = append(report.Findings, result.findings...)
+	}
+
+	if firstErr != nil {
+		return nil, firstErr
+	}
+
+	sortFindings(report.Findings)
 	return report, nil
 }
 
-func (a *Auditor) compareCall(ctx context.Context, report *Report, method string, params ...any) map[string]json.RawMessage {
-	report.Checks += len(a.peers)
+type blockAuditResult struct {
+	blockNumber uint64
+	checks      int
+	findings    []Finding
+	err         error
+}
 
-	results := make(map[string]json.RawMessage, len(a.peers)+1)
-	baselineResponse, _, baselineErr := a.baseline.Provider.Call(ctx, method, params...)
-	if baselineErr == nil && baselineResponse != nil {
-		results[a.baseline.Target.Name] = baselineResponse.Result
+type compareCallResult struct {
+	checks   int
+	results  map[string]json.RawMessage
+	findings []Finding
+	err      error
+}
+
+func (a *Auditor) auditBlock(ctx context.Context, blockNumber uint64) blockAuditResult {
+	if err := ctx.Err(); err != nil {
+		return blockAuditResult{blockNumber: blockNumber, err: err}
+	}
+
+	var findings []Finding
+	checks := 0
+	blockTag := rpc.HexBlockNumber(blockNumber)
+
+	blockResults := a.compareCall(ctx, "eth_getBlockByNumber", blockTag, false)
+	if blockResults.err != nil {
+		return blockAuditResult{blockNumber: blockNumber, err: blockResults.err}
+	}
+	checks += blockResults.checks
+	findings = append(findings, blockResults.findings...)
+
+	baselineBlock, ok := blockResults.results[endpointKey(a.baseline)]
+	if !ok {
+		return blockAuditResult{
+			blockNumber: blockNumber,
+			checks:      checks,
+			findings:    findings,
+		}
+	}
+
+	txHashes := make(map[string]struct{})
+	addresses := make(map[string]struct{})
+	collectBlockReferences(baselineBlock, txHashes, addresses)
+
+	for _, txHash := range sortedKeys(txHashes) {
+		transactionResults := a.compareCall(ctx, "eth_getTransactionByHash", txHash)
+		if transactionResults.err != nil {
+			return blockAuditResult{blockNumber: blockNumber, err: transactionResults.err}
+		}
+		checks += transactionResults.checks
+		findings = append(findings, transactionResults.findings...)
+		if baselineTransaction, ok := transactionResults.results[endpointKey(a.baseline)]; ok {
+			collectTransactionAddresses(baselineTransaction, addresses)
+		}
+
+		receiptResults := a.compareCall(ctx, "eth_getTransactionReceipt", txHash)
+		if receiptResults.err != nil {
+			return blockAuditResult{blockNumber: blockNumber, err: receiptResults.err}
+		}
+		checks += receiptResults.checks
+		findings = append(findings, receiptResults.findings...)
+	}
+
+	stateTags := []string{blockTag}
+	if previous, ok := rpc.PreviousBlockTag(blockNumber); ok {
+		stateTags = append(stateTags, previous)
+	}
+
+	for _, address := range sortedKeys(addresses) {
+		for _, tag := range stateTags {
+			balanceResults := a.compareCall(ctx, "eth_getBalance", address, tag)
+			if balanceResults.err != nil {
+				return blockAuditResult{blockNumber: blockNumber, err: balanceResults.err}
+			}
+			checks += balanceResults.checks
+			findings = append(findings, balanceResults.findings...)
+
+			nonceResults := a.compareCall(ctx, "eth_getTransactionCount", address, tag)
+			if nonceResults.err != nil {
+				return blockAuditResult{blockNumber: blockNumber, err: nonceResults.err}
+			}
+			checks += nonceResults.checks
+			findings = append(findings, nonceResults.findings...)
+		}
+	}
+
+	return blockAuditResult{
+		blockNumber: blockNumber,
+		checks:      checks,
+		findings:    findings,
+	}
+}
+
+func (a *Auditor) compareCall(ctx context.Context, method string, params ...any) compareCallResult {
+	if err := ctx.Err(); err != nil {
+		return compareCallResult{err: err}
+	}
+
+	endpoints := make([]Endpoint, 0, len(a.peers)+1)
+	endpoints = append(endpoints, a.baseline)
+	endpoints = append(endpoints, a.peers...)
+
+	responses := make(chan endpointResponse, len(endpoints))
+	for _, endpoint := range endpoints {
+		go func(endpoint Endpoint) {
+			response, _, err := endpoint.Provider.Call(ctx, method, params...)
+			responses <- endpointResponse{
+				endpoint: endpoint,
+				response: response,
+				err:      err,
+			}
+		}(endpoint)
+	}
+
+	byEndpoint := make(map[string]endpointResponse, len(endpoints))
+	for index := 0; index < len(endpoints); index++ {
+		response := <-responses
+		byEndpoint[endpointKey(response.endpoint)] = response
+	}
+
+	if err := ctx.Err(); err != nil {
+		return compareCallResult{err: err}
+	}
+
+	result := compareCallResult{
+		checks:  len(a.peers),
+		results: make(map[string]json.RawMessage, len(endpoints)),
+	}
+
+	baselineResponse := byEndpoint[endpointKey(a.baseline)]
+	if baselineResponse.err == nil && baselineResponse.response != nil {
+		result.results[endpointKey(a.baseline)] = baselineResponse.response.Result
 	}
 
 	for _, peer := range a.peers {
-		peerResponse, _, peerErr := peer.Provider.Call(ctx, method, params...)
-		if peerErr == nil && peerResponse != nil {
-			results[peer.Target.Name] = peerResponse.Result
+		peerResponse := byEndpoint[endpointKey(peer)]
+		if peerResponse.err == nil && peerResponse.response != nil {
+			result.results[endpointKey(peer)] = peerResponse.response.Result
 		}
 
 		switch {
-		case baselineErr != nil && peerErr != nil:
-			if baselineErr.Error() != peerErr.Error() {
-				report.Findings = append(report.Findings, Finding{
+		case baselineResponse.err != nil && peerResponse.err != nil:
+			if baselineResponse.err.Error() != peerResponse.err.Error() {
+				result.findings = append(result.findings, Finding{
 					Endpoint: peer.Target.Name,
 					Method:   method,
 					Params:   append([]any(nil), params...),
-					Error:    fmt.Sprintf("baseline error %q != peer error %q", baselineErr, peerErr),
+					Error:    fmt.Sprintf("baseline error %q != peer error %q", baselineResponse.err, peerResponse.err),
 				})
 			}
-		case baselineErr != nil || peerErr != nil:
-			report.Findings = append(report.Findings, Finding{
+		case baselineResponse.err != nil || peerResponse.err != nil:
+			result.findings = append(result.findings, Finding{
 				Endpoint: peer.Target.Name,
 				Method:   method,
 				Params:   append([]any(nil), params...),
-				Error:    fmt.Sprintf("baseline error %v / peer error %v", baselineErr, peerErr),
+				Error:    fmt.Sprintf("baseline error %v / peer error %v", baselineResponse.err, peerResponse.err),
 			})
 		default:
-			differences, err := CompareJSON(baselineResponse.Result, peerResponse.Result, a.options)
+			differences, err := CompareJSON(baselineResponse.response.Result, peerResponse.response.Result, a.options)
 			if err != nil {
-				report.Findings = append(report.Findings, Finding{
+				result.findings = append(result.findings, Finding{
 					Endpoint: peer.Target.Name,
 					Method:   method,
 					Params:   append([]any(nil), params...),
@@ -141,7 +316,7 @@ func (a *Auditor) compareCall(ctx context.Context, report *Report, method string
 				continue
 			}
 			if len(differences) > 0 {
-				report.Findings = append(report.Findings, Finding{
+				result.findings = append(result.findings, Finding{
 					Endpoint:    peer.Target.Name,
 					Method:      method,
 					Params:      append([]any(nil), params...),
@@ -151,7 +326,20 @@ func (a *Auditor) compareCall(ctx context.Context, report *Report, method string
 		}
 	}
 
-	return results
+	return result
+}
+
+type endpointResponse struct {
+	endpoint Endpoint
+	response *rpc.Response
+	err      error
+}
+
+func endpointKey(endpoint Endpoint) string {
+	if endpoint.Target.URL != "" {
+		return endpoint.Target.URL
+	}
+	return endpoint.Target.Name
 }
 
 func collectBlockReferences(raw json.RawMessage, txHashes, addresses map[string]struct{}) {
@@ -230,4 +418,36 @@ func sortedKeys(values map[string]struct{}) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func sortFindings(findings []Finding) {
+	sort.Slice(findings, func(i, j int) bool {
+		return findingSortKey(findings[i]) < findingSortKey(findings[j])
+	})
+}
+
+func findingSortKey(finding Finding) string {
+	params, err := json.Marshal(finding.Params)
+	if err != nil {
+		return finding.Endpoint + "|" + finding.Method + "|" + fmt.Sprint(finding.Params)
+	}
+	return finding.Endpoint + "|" + finding.Method + "|" + string(params)
+}
+
+func defaultAuditorConcurrency() int {
+	concurrency := runtime.GOMAXPROCS(0)
+	if concurrency < 1 {
+		return 1
+	}
+	if concurrency > 8 {
+		return 8
+	}
+	return concurrency
+}
+
+func minInt(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
 }

@@ -15,6 +15,7 @@ var (
 	datasetFrom    uint64
 	datasetToBlock uint64
 	datasetOut     string
+	datasetWorkers int
 	datasetTimeout time.Duration
 )
 
@@ -38,7 +39,7 @@ var datasetCmd = &cobra.Command{
 		}
 		defer file.Close()
 
-		collector := dataset.NewCollector(provider)
+		collector := dataset.NewCollector(provider, dataset.WithConcurrency(datasetWorkers))
 		summary, err := collector.Collect(context.Background(), datasetFrom, datasetToBlock, file)
 		if err != nil {
 			return err
@@ -57,6 +58,7 @@ func init() {
 	datasetCmd.Flags().Uint64Var(&datasetFrom, "from", 0, "Start block (inclusive)")
 	datasetCmd.Flags().Uint64Var(&datasetToBlock, "to-block", 0, "End block (inclusive)")
 	datasetCmd.Flags().StringVar(&datasetOut, "out", "dataset.json", "Output dataset path")
+	datasetCmd.Flags().IntVar(&datasetWorkers, "concurrency", 8, "Number of concurrent block fetch workers")
 	datasetCmd.Flags().DurationVar(&datasetTimeout, "timeout", 15*time.Second, "Per-request timeout")
 
 	_ = datasetCmd.MarkFlagRequired("to")

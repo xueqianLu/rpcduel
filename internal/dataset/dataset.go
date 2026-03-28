@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xueqianLu/rpcduel/pkg/rpc"
@@ -64,18 +66,40 @@ type Summary struct {
 	Addresses    int
 }
 
+type CollectorOption func(*Collector)
+
 type Collector struct {
-	provider *rpc.Provider
+	provider    *rpc.Provider
+	concurrency int
 }
 
-func NewCollector(provider *rpc.Provider) *Collector {
-	return &Collector{provider: provider}
+func NewCollector(provider *rpc.Provider, options ...CollectorOption) *Collector {
+	collector := &Collector{
+		provider:    provider,
+		concurrency: defaultCollectorConcurrency(),
+	}
+	for _, option := range options {
+		option(collector)
+	}
+	if collector.concurrency <= 0 {
+		collector.concurrency = 1
+	}
+	return collector
+}
+
+func WithConcurrency(concurrency int) CollectorOption {
+	return func(collector *Collector) {
+		collector.concurrency = concurrency
+	}
 }
 
 func (c *Collector) Collect(ctx context.Context, from, to uint64, output io.Writer) (Summary, error) {
 	if from > to {
 		return Summary{}, fmt.Errorf("invalid range: from=%d is greater than to=%d", from, to)
 	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	writer := newStreamWriter(output)
 	if err := writer.Begin(Metadata{
@@ -90,63 +114,162 @@ func (c *Collector) Collect(ctx context.Context, from, to uint64, output io.Writ
 	summary := Summary{}
 	seenTransactions := make(map[string]struct{})
 	seenAddresses := make(map[string]struct{})
+	concurrency := min(c.concurrency, int(to-from+1))
+	if concurrency <= 0 {
+		concurrency = 1
+	}
 
-	for blockNumber := from; blockNumber <= to; blockNumber++ {
-		response, _, err := c.provider.BlockByNumber(ctx, blockNumber, true)
-		if err != nil {
-			return summary, fmt.Errorf("fetch block %d: %w", blockNumber, err)
-		}
+	jobs := make(chan uint64)
+	results := make(chan blockFetchResult, concurrency)
 
-		blockRecord, transactions, addresses, err := decodeBlock(response.Result)
-		if err != nil {
-			return summary, fmt.Errorf("decode block %d: %w", blockNumber, err)
-		}
-
-		if blockRecord == nil {
-			continue
-		}
-
-		if err := writer.WriteRecord(Record{
-			Type:  RecordTypeBlock,
-			Block: blockRecord,
-		}); err != nil {
-			return summary, err
-		}
-		summary.Blocks++
-
-		for _, transaction := range transactions {
-			if _, ok := seenTransactions[transactionKey(transaction.Hash)]; ok {
-				continue
+	var workerGroup sync.WaitGroup
+	for worker := 0; worker < concurrency; worker++ {
+		workerGroup.Add(1)
+		go func() {
+			defer workerGroup.Done()
+			for blockNumber := range jobs {
+				result := c.fetchBlock(ctx, blockNumber)
+				select {
+				case results <- result:
+				case <-ctx.Done():
+					return
+				}
+				if result.err != nil {
+					return
+				}
 			}
-			seenTransactions[transactionKey(transaction.Hash)] = struct{}{}
-			if err := writer.WriteRecord(Record{
-				Type:        RecordTypeTransaction,
-				Transaction: transaction,
-			}); err != nil {
-				return summary, err
+		}()
+	}
+
+	go func() {
+		defer close(jobs)
+		for blockNumber := from; ; blockNumber++ {
+			select {
+			case jobs <- blockNumber:
+			case <-ctx.Done():
+				return
 			}
-			summary.Transactions++
+			if blockNumber == to {
+				return
+			}
+		}
+	}()
+
+	go func() {
+		workerGroup.Wait()
+		close(results)
+	}()
+
+	pending := make(map[uint64]blockFetchResult, concurrency)
+	nextBlock := from
+	var firstErr error
+
+	for result := range results {
+		if result.err != nil && firstErr == nil {
+			firstErr = result.err
+			cancel()
 		}
 
-		for _, address := range addresses {
-			if _, ok := seenAddresses[addressKey(address.Address)]; ok {
-				continue
+		pending[result.blockNumber] = result
+		for {
+			current, ok := pending[nextBlock]
+			if !ok {
+				break
 			}
-			seenAddresses[addressKey(address.Address)] = struct{}{}
-			if err := writer.WriteRecord(Record{
-				Type:    RecordTypeAddress,
-				Address: address,
-			}); err != nil {
-				return summary, err
+			delete(pending, nextBlock)
+			if current.err != nil {
+				break
 			}
-			summary.Addresses++
+			if current.blockRecord != nil {
+				if err := writer.WriteRecord(Record{
+					Type:  RecordTypeBlock,
+					Block: current.blockRecord,
+				}); err != nil {
+					cancel()
+					return summary, err
+				}
+				summary.Blocks++
+			}
+
+			for _, transaction := range current.transactions {
+				if _, ok := seenTransactions[transactionKey(transaction.Hash)]; ok {
+					continue
+				}
+				seenTransactions[transactionKey(transaction.Hash)] = struct{}{}
+				if err := writer.WriteRecord(Record{
+					Type:        RecordTypeTransaction,
+					Transaction: transaction,
+				}); err != nil {
+					cancel()
+					return summary, err
+				}
+				summary.Transactions++
+			}
+
+			for _, address := range current.addresses {
+				if _, ok := seenAddresses[addressKey(address.Address)]; ok {
+					continue
+				}
+				seenAddresses[addressKey(address.Address)] = struct{}{}
+				if err := writer.WriteRecord(Record{
+					Type:    RecordTypeAddress,
+					Address: address,
+				}); err != nil {
+					cancel()
+					return summary, err
+				}
+				summary.Addresses++
+			}
+
+			if nextBlock == to {
+				break
+			}
+			nextBlock++
 		}
+	}
+
+	if firstErr != nil {
+		_ = writer.Close()
+		return summary, firstErr
 	}
 
 	if err := writer.Close(); err != nil {
 		return summary, err
 	}
 	return summary, nil
+}
+
+type blockFetchResult struct {
+	blockNumber  uint64
+	blockRecord  *BlockRecord
+	transactions []*TransactionData
+	addresses    []*AddressData
+	err          error
+}
+
+func (c *Collector) fetchBlock(ctx context.Context, blockNumber uint64) blockFetchResult {
+	response, _, err := c.provider.BlockByNumber(ctx, blockNumber, true)
+	if err != nil {
+		return blockFetchResult{
+			blockNumber: blockNumber,
+			err:         fmt.Errorf("fetch block %d: %w", blockNumber, err),
+		}
+	}
+
+	blockRecord, transactions, addresses, err := decodeBlock(response.Result)
+	if err != nil {
+		return blockFetchResult{
+			blockNumber: blockNumber,
+			err:         fmt.Errorf("decode block %d: %w", blockNumber, err),
+		}
+	}
+
+	return blockFetchResult{
+		blockNumber:  blockNumber,
+		blockRecord:  blockRecord,
+		transactions: transactions,
+		addresses:    addresses,
+	}
 }
 
 func Load(path string) (*File, error) {
@@ -311,4 +434,22 @@ func transactionKey(hash string) string {
 
 func addressKey(address string) string {
 	return strings.ToLower(strings.TrimSpace(address))
+}
+
+func defaultCollectorConcurrency() int {
+	concurrency := runtime.GOMAXPROCS(0)
+	if concurrency < 1 {
+		return 1
+	}
+	if concurrency > 8 {
+		return 8
+	}
+	return concurrency
+}
+
+func min(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
 }

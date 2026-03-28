@@ -6,18 +6,18 @@
 
 `dataset`
 
-Scan a block range from one endpoint and stream unique block, transaction, and address records into `dataset.json`.
+Scan a block range from one endpoint and stream unique block, transaction, and address records into `dataset.json`. Block fetching uses a bounded worker pool, configurable with `--concurrency`.
 
 ```bash
-rpcduel dataset --to https://rpc.example --from 20000000 --to-block 20000010 --out dataset.json
+rpcduel dataset --to https://rpc.example --from 20000000 --to-block 20000010 --concurrency 16 --out dataset.json
 ```
 
 `diff`
 
-Compare block, transaction, receipt, balance, and nonce responses across multiple endpoints with semantic field masking.
+Compare block, transaction, receipt, balance, and nonce responses across multiple endpoints with semantic field masking. Block-range auditing uses concurrent workers, configurable with `--concurrency`.
 
 ```bash
-rpcduel diff --to primary=https://rpc-a.example --to https://rpc-b.example --from 20000000 --to-block 20000001 --ignore size
+rpcduel diff --to primary=https://rpc-a.example --to https://rpc-b.example --from 20000000 --to-block 20000001 --concurrency 16 --ignore size
 ```
 
 If you want aliases instead of raw URLs, define them with repeated root-level `--provider alias=url` flags:

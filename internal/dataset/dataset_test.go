@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -120,5 +121,93 @@ func TestCollectorCollectStreamsValidDatasetAndDeduplicates(t *testing.T) {
 
 	if firstBlock.Hash != "0xblock1" || firstBlock.ParentHash != "0xparent0" || firstBlock.Timestamp != 100 || firstBlock.TxCount != 2 {
 		t.Fatalf("Collect() first block = %+v", firstBlock)
+	}
+}
+
+func TestCollectorCollectUsesConcurrentBlockFetches(t *testing.T) {
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var inFlight atomic.Int32
+	var maxInFlight atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request rpc.Request
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if request.Method == "eth_getBlockByNumber" {
+			current := inFlight.Add(1)
+			for {
+				maximum := maxInFlight.Load()
+				if current <= maximum || maxInFlight.CompareAndSwap(maximum, current) {
+					break
+				}
+			}
+
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+
+			<-release
+			inFlight.Add(-1)
+		}
+
+		blockTag, _ := request.Params[0].(string)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      request.ID,
+			"result": map[string]any{
+				"number":       blockTag,
+				"hash":         blockTag + "-hash",
+				"parentHash":   "0xparent",
+				"timestamp":    "0x1",
+				"transactions": []any{},
+			},
+		})
+	}))
+	defer server.Close()
+
+	provider := rpc.NewProvider(
+		rpc.Target{Name: "fixture", URL: server.URL},
+		5*time.Second,
+		rpc.WithRetryPolicy(rpc.RetryPolicy{
+			MaxAttempts: 1,
+			BaseBackoff: time.Millisecond,
+			MaxBackoff:  time.Millisecond,
+		}),
+	)
+
+	done := make(chan error, 1)
+	go func() {
+		var output bytes.Buffer
+		_, err := dataset.NewCollector(provider, dataset.WithConcurrency(2)).Collect(context.Background(), 1, 2, &output)
+		done <- err
+	}()
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for concurrent dataset requests")
+		}
+	}
+
+	close(release)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Collect() error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for dataset collection to finish")
+	}
+
+	if maxInFlight.Load() < 2 {
+		t.Fatalf("max concurrent block fetches = %d, want at least 2", maxInFlight.Load())
 	}
 }
