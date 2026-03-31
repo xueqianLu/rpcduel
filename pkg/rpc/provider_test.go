@@ -147,6 +147,47 @@ func TestProviderCallReturnsRPCErrorWithoutRetry(t *testing.T) {
 	}
 }
 
+func TestProviderCallTimeoutBoundsWholeRetryWindow(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		time.Sleep(200 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"result":  "0x1",
+		})
+	}))
+	defer server.Close()
+
+	provider := rpc.NewProvider(
+		rpc.Target{Name: "test", URL: server.URL},
+		50*time.Millisecond,
+		rpc.WithRetryPolicy(rpc.RetryPolicy{
+			MaxAttempts: 4,
+			BaseBackoff: time.Millisecond,
+			MaxBackoff:  2 * time.Millisecond,
+		}),
+	)
+
+	start := time.Now()
+	_, meta, err := provider.Call(context.Background(), "eth_getBalance", "0xabc", "latest")
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("Call() error = nil, want timeout")
+	}
+	if meta.Attempts != 1 {
+		t.Fatalf("Call() attempts = %d, want 1 because timeout should bound retries", meta.Attempts)
+	}
+	if attempts != 1 {
+		t.Fatalf("server attempts = %d, want 1", attempts)
+	}
+	if elapsed > 150*time.Millisecond {
+		t.Fatalf("Call() elapsed = %v, want bounded by overall timeout", elapsed)
+	}
+}
+
 func TestParseQuantityUint64(t *testing.T) {
 	value, err := rpc.ParseQuantityUint64("0x01")
 	if err != nil {

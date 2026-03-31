@@ -39,7 +39,21 @@ var datasetCmd = &cobra.Command{
 		}
 		defer file.Close()
 
-		collector := dataset.NewCollector(provider, dataset.WithConcurrency(datasetWorkers))
+		collector := dataset.NewCollector(
+			provider,
+			dataset.WithConcurrency(datasetWorkers),
+			dataset.WithProgressReporter(func(progress dataset.Progress) {
+				fmt.Fprintf(
+					cmd.ErrOrStderr(),
+					"[progress] fetched %d/%d blocks, collected blocks=%d txs=%d addresses=%d\n",
+					progress.FetchedBlocks,
+					progress.TotalBlocks,
+					progress.Blocks,
+					progress.Transactions,
+					progress.Addresses,
+				)
+			}),
+		)
 		summary, err := collector.Collect(context.Background(), datasetFrom, datasetToBlock, file)
 		if err != nil {
 			return err
@@ -59,7 +73,7 @@ func init() {
 	datasetCmd.Flags().Uint64Var(&datasetToBlock, "to-block", 0, "End block (inclusive)")
 	datasetCmd.Flags().StringVar(&datasetOut, "out", "dataset.json", "Output dataset path")
 	datasetCmd.Flags().IntVar(&datasetWorkers, "concurrency", 8, "Number of concurrent block fetch workers")
-	datasetCmd.Flags().DurationVar(&datasetTimeout, "timeout", 15*time.Second, "Per-request timeout")
+	datasetCmd.Flags().DurationVar(&datasetTimeout, "timeout", 15*time.Second, "Per-RPC-call timeout, including retries")
 
 	_ = datasetCmd.MarkFlagRequired("to")
 	_ = datasetCmd.MarkFlagRequired("to-block")

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -209,5 +210,79 @@ func TestCollectorCollectUsesConcurrentBlockFetches(t *testing.T) {
 
 	if maxInFlight.Load() < 2 {
 		t.Fatalf("max concurrent block fetches = %d, want at least 2", maxInFlight.Load())
+	}
+}
+
+func TestCollectorCollectReportsProgress(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request rpc.Request
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		time.Sleep(30 * time.Millisecond)
+		blockTag, _ := request.Params[0].(string)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      request.ID,
+			"result": map[string]any{
+				"number":       blockTag,
+				"hash":         blockTag + "-hash",
+				"parentHash":   "0xparent",
+				"timestamp":    "0x1",
+				"transactions": []any{},
+			},
+		})
+	}))
+	defer server.Close()
+
+	provider := rpc.NewProvider(
+		rpc.Target{Name: "fixture", URL: server.URL},
+		5*time.Second,
+		rpc.WithRetryPolicy(rpc.RetryPolicy{
+			MaxAttempts: 1,
+			BaseBackoff: time.Millisecond,
+			MaxBackoff:  time.Millisecond,
+		}),
+	)
+
+	var (
+		mu       sync.Mutex
+		progress []dataset.Progress
+	)
+	collector := dataset.NewCollector(
+		provider,
+		dataset.WithConcurrency(1),
+		dataset.WithProgressInterval(10*time.Millisecond),
+		dataset.WithProgressReporter(func(update dataset.Progress) {
+			mu.Lock()
+			progress = append(progress, update)
+			mu.Unlock()
+		}),
+	)
+
+	var output bytes.Buffer
+	summary, err := collector.Collect(context.Background(), 1, 2, &output)
+	if err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	if summary.Blocks != 2 {
+		t.Fatalf("Collect() blocks = %d, want 2", summary.Blocks)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(progress) == 0 {
+		t.Fatal("Collect() did not report progress")
+	}
+
+	last := progress[len(progress)-1]
+	if !last.Done {
+		t.Fatalf("final progress = %+v, want Done=true", last)
+	}
+	if last.FetchedBlocks != 2 || last.TotalBlocks != 2 || last.Blocks != 2 {
+		t.Fatalf("final progress = %+v, want all blocks accounted for", last)
 	}
 }

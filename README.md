@@ -6,7 +6,7 @@
 
 `dataset`
 
-Scan a block range from one endpoint and stream unique block, transaction, and address records into `dataset.json`. Block fetching uses a bounded worker pool, configurable with `--concurrency`.
+Scan a block range from one endpoint and stream unique block, transaction, and address records into `dataset.json`. Block fetching uses a bounded worker pool, configurable with `--concurrency`, and progress is printed to `stderr` every few seconds during collection.
 
 ```bash
 rpcduel dataset --to https://rpc.example --from 20000000 --to-block 20000010 --concurrency 16 --out dataset.json

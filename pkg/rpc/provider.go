@@ -103,6 +103,7 @@ type Provider struct {
 	target    Target
 	client    *http.Client
 	retry     RetryPolicy
+	timeout   time.Duration
 	userAgent string
 	nextID    atomic.Int64
 }
@@ -122,6 +123,7 @@ func NewProvider(target Target, timeout time.Duration, options ...Option) *Provi
 			Transport: transport,
 		},
 		retry:     DefaultRetryPolicy(),
+		timeout:   timeout,
 		userAgent: "rpcduel/0.1",
 	}
 
@@ -180,6 +182,12 @@ type CallMeta struct {
 }
 
 func (p *Provider) Call(ctx context.Context, method string, params ...any) (*Response, CallMeta, error) {
+	if p.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, p.timeout)
+		defer cancel()
+	}
+
 	payload, err := json.Marshal(Request{
 		JSONRPC: jsonRPCVersion,
 		Method:  method,

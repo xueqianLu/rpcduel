@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/xueqianLu/rpcduel/pkg/rpc"
@@ -66,17 +67,29 @@ type Summary struct {
 	Addresses    int
 }
 
+type Progress struct {
+	FetchedBlocks uint64
+	TotalBlocks   uint64
+	Blocks        int
+	Transactions  int
+	Addresses     int
+	Done          bool
+}
+
 type CollectorOption func(*Collector)
 
 type Collector struct {
-	provider    *rpc.Provider
-	concurrency int
+	provider         *rpc.Provider
+	concurrency      int
+	progressInterval time.Duration
+	progressReporter func(Progress)
 }
 
 func NewCollector(provider *rpc.Provider, options ...CollectorOption) *Collector {
 	collector := &Collector{
-		provider:    provider,
-		concurrency: defaultCollectorConcurrency(),
+		provider:         provider,
+		concurrency:      defaultCollectorConcurrency(),
+		progressInterval: 3 * time.Second,
 	}
 	for _, option := range options {
 		option(collector)
@@ -90,6 +103,18 @@ func NewCollector(provider *rpc.Provider, options ...CollectorOption) *Collector
 func WithConcurrency(concurrency int) CollectorOption {
 	return func(collector *Collector) {
 		collector.concurrency = concurrency
+	}
+}
+
+func WithProgressInterval(interval time.Duration) CollectorOption {
+	return func(collector *Collector) {
+		collector.progressInterval = interval
+	}
+}
+
+func WithProgressReporter(reporter func(Progress)) CollectorOption {
+	return func(collector *Collector) {
+		collector.progressReporter = reporter
 	}
 }
 
@@ -114,6 +139,19 @@ func (c *Collector) Collect(ctx context.Context, from, to uint64, output io.Writ
 	summary := Summary{}
 	seenTransactions := make(map[string]struct{})
 	seenAddresses := make(map[string]struct{})
+	totalBlocks := to - from + 1
+	var fetchedBlocks atomic.Uint64
+	var collectedBlocks atomic.Int64
+	var collectedTransactions atomic.Int64
+	var collectedAddresses atomic.Int64
+	stopProgress := c.startProgressReporter(
+		totalBlocks,
+		&fetchedBlocks,
+		&collectedBlocks,
+		&collectedTransactions,
+		&collectedAddresses,
+	)
+	defer stopProgress()
 	concurrency := min(c.concurrency, int(to-from+1))
 	if concurrency <= 0 {
 		concurrency = 1
@@ -165,6 +203,7 @@ func (c *Collector) Collect(ctx context.Context, from, to uint64, output io.Writ
 	var firstErr error
 
 	for result := range results {
+		fetchedBlocks.Add(1)
 		if result.err != nil && firstErr == nil {
 			firstErr = result.err
 			cancel()
@@ -189,6 +228,7 @@ func (c *Collector) Collect(ctx context.Context, from, to uint64, output io.Writ
 					return summary, err
 				}
 				summary.Blocks++
+				collectedBlocks.Add(1)
 			}
 
 			for _, transaction := range current.transactions {
@@ -204,6 +244,7 @@ func (c *Collector) Collect(ctx context.Context, from, to uint64, output io.Writ
 					return summary, err
 				}
 				summary.Transactions++
+				collectedTransactions.Add(1)
 			}
 
 			for _, address := range current.addresses {
@@ -219,6 +260,7 @@ func (c *Collector) Collect(ctx context.Context, from, to uint64, output io.Writ
 					return summary, err
 				}
 				summary.Addresses++
+				collectedAddresses.Add(1)
 			}
 
 			if nextBlock == to {
@@ -237,6 +279,56 @@ func (c *Collector) Collect(ctx context.Context, from, to uint64, output io.Writ
 		return summary, err
 	}
 	return summary, nil
+}
+
+func (c *Collector) startProgressReporter(
+	totalBlocks uint64,
+	fetchedBlocks *atomic.Uint64,
+	collectedBlocks *atomic.Int64,
+	collectedTransactions *atomic.Int64,
+	collectedAddresses *atomic.Int64,
+) func() {
+	if c.progressReporter == nil || c.progressInterval <= 0 {
+		return func() {}
+	}
+
+	snapshot := func(done bool) Progress {
+		return Progress{
+			FetchedBlocks: fetchedBlocks.Load(),
+			TotalBlocks:   totalBlocks,
+			Blocks:        int(collectedBlocks.Load()),
+			Transactions:  int(collectedTransactions.Load()),
+			Addresses:     int(collectedAddresses.Load()),
+			Done:          done,
+		}
+	}
+
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	var once sync.Once
+
+	go func() {
+		defer close(stopped)
+		ticker := time.NewTicker(c.progressInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				c.progressReporter(snapshot(false))
+			case <-done:
+				c.progressReporter(snapshot(true))
+				return
+			}
+		}
+	}()
+
+	return func() {
+		once.Do(func() {
+			close(done)
+		})
+		<-stopped
+	}
 }
 
 type blockFetchResult struct {
