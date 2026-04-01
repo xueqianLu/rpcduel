@@ -282,7 +282,7 @@ func TestRun_AddsTraceTasks(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if result.TotalRequests != 5 {
-		t.Fatalf("expected 5 diff-test tasks (tx, receipt, trace tx, block, trace block), got %d", result.TotalRequests)
+		t.Fatalf("expected 5 replay tasks (tx, receipt, trace tx, block, trace block), got %d", result.TotalRequests)
 	}
 
 	for _, want := range []requestShape{

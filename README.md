@@ -15,7 +15,7 @@ It collects real on-chain data, runs response-consistency tests across multiple 
   - [bench](#bench)
   - [duel](#duel)
   - [dataset](#dataset)
-  - [diff-test](#diff-test)
+  - [replay](#replay)
   - [benchgen](#benchgen)
 - [Data-Driven Testing Workflow](#data-driven-testing-workflow)
 - [Output Formats](#output-formats)
@@ -32,7 +32,7 @@ It collects real on-chain data, runs response-consistency tests across multiple 
 | **Response diffing** | Deep JSON comparison with hex/decimal normalisation, field ignoring, and order-insensitive array comparison |
 | **Benchmarking** | Concurrent load generation with QPS, avg/P95/P99 latency and error-rate reporting |
 | **Duel mode** | Run diff and bench simultaneously against two endpoints |
-| **On-chain dataset collection** | Scan a block range (high → low) via an Ethereum JSON-RPC endpoint using multiple concurrent goroutines and collect blocks, transactions, and accounts ranked by activity; per-account transaction lists are stored in the dataset for efficient diff-test |
+| **On-chain dataset collection** | Scan a block range (high → low) via an Ethereum JSON-RPC endpoint using multiple concurrent goroutines and collect blocks, transactions, and accounts ranked by activity; per-account transaction lists are stored in the dataset for efficient replay |
 | **Data-driven consistency tests** | Replay real chain data against two endpoints and classify every difference (`balance_mismatch`, `nonce_mismatch`, `tx_mismatch`, …) |
 | **Scenario-driven load test** | Turn a dataset into weighted scenarios, optionally export them as a bench file, and run them directly with `benchgen`; per-scenario metrics (QPS, avg/P50/P95/P99/min/max latency, error rate) are written to a CSV report |
 | **Archive-node awareness** | `missing trie node` / `state not found` errors are detected and excluded from diff counts |
@@ -256,7 +256,7 @@ rpcduel duel \
 
 ### `dataset`
 
-Scan a block range **from high to low** via an Ethereum JSON-RPC endpoint and save a representative set of blocks, transactions, and accounts to a JSON file for use with `diff-test` and `benchgen`.
+Scan a block range **from high to low** via an Ethereum JSON-RPC endpoint and save a representative set of blocks, transactions, and accounts to a JSON file for use with `replay` and `benchgen`.
 
 The scanner calls `eth_getBlockByNumber` (with full transaction objects) for every block in the range, collects non-empty blocks, extracts transactions, and ranks all addresses by the number of times they appear — all without requiring an external explorer.
 
@@ -293,18 +293,20 @@ rpcduel dataset \
 
 Scanning stops early once all three collection limits (`--accounts`, `--txs`, `--blocks`) are satisfied. When `--to-block` is omitted, the current chain head is resolved automatically via `eth_blockNumber`.
 
-Per-account transaction lists (up to `--max-tx-per-account` entries each) are embedded directly in each account record. This allows `diff-test` to query historical account state at the correct block numbers without re-fetching transaction lists at test time.
+Per-account transaction lists (up to `--max-tx-per-account` entries each) are embedded directly in each account record. This allows `replay` to query historical account state at the correct block numbers without re-fetching transaction lists at test time.
 
 The exported JSON is deterministically ordered: accounts by tx count (descending), blocks by number (descending), and transactions by block number (ascending).
 
 ---
 
-### `diff-test`
+### `replay`
 
 Load a dataset and run a full consistency test suite against two endpoints.  
 Every account, transaction, and block in the dataset generates real RPC calls, and any response differences are classified and reported.
 
-By default, `diff-test` covers the basic RPCs below. Trace RPCs can be enabled explicitly with flags when needed:
+By default, `replay` covers the basic RPCs below. Trace RPCs can be enabled explicitly with flags when needed.
+
+The old command name `diff-test` is still accepted as a compatibility alias.
 
 - accounts → `eth_getBalance`, `eth_getTransactionCount`
 - transactions → `eth_getTransactionByHash`, `eth_getTransactionReceipt`
@@ -314,7 +316,7 @@ By default, `diff-test` covers the basic RPCs below. Trace RPCs can be enabled e
 To avoid wasted work, duplicate tasks with the same **method + params** are automatically removed. Different methods for the same transaction or block are **not** treated as duplicates, so `eth_getTransactionByHash` and `debug_traceTransaction` will both run.
 
 ```
-rpcduel diff-test [flags]
+rpcduel replay [flags]
 ```
 
 | Flag | Default | Description |
@@ -359,7 +361,7 @@ Trace RPCs are often much heavier than standard RPCs and may not be enabled on e
 **Example**
 
 ```bash
-rpcduel diff-test \
+rpcduel replay \
   --dataset mainnet-dataset.json \
   --rpc https://rpc-a.example.com \
   --rpc https://rpc-b.example.com \
@@ -367,8 +369,8 @@ rpcduel diff-test \
   --trace-transaction \
   --trace-block \
   --output json \
-  --report diff-test-report.json \
-  --csv diff-test-report.csv
+  --report replay-report.json \
+  --csv replay-report.csv
 ```
 
 ---
@@ -451,7 +453,7 @@ rpcduel benchgen \
                    dataset.json
                     ┌────┴────┐
                     │         │
-          diff-test │         │ benchgen
+             replay │         │ benchgen
                     │         │
                     ▼         ▼
               Consistency  Performance report
@@ -471,12 +473,12 @@ rpcduel dataset \
 **Step 2 — Run consistency tests**
 
 ```bash
-rpcduel diff-test \
+rpcduel replay \
   --dataset dataset.json \
   --rpc https://node-a.example.com \
   --rpc https://node-b.example.com \
-  --report diff-test-report.json \
-  --csv diff-test-report.csv
+  --report replay-report.json \
+  --csv replay-report.csv
 ```
 
 Progress is printed to stderr as tasks complete. When finished, the summary is printed to stdout (or `--report` file) and a full CSV of all diffs is written to `--csv`.
@@ -531,10 +533,10 @@ Result:
 }
 ```
 
-**Text — diff-test**
+**Text — replay**
 
 ```
-Diff-Test Result
+Replay Result
 ----------------------------------------
 Accounts tested:     500
 Transactions tested: 500
@@ -566,7 +568,7 @@ Endpoint:   https://rpc.example.com
   P99:      38.442ms
 ```
 
-**JSON — diff-test**
+**JSON — replay**
 
 ```json
 {
@@ -644,7 +646,7 @@ Endpoint:   https://rpc.example.com
 | `blocks` | `number` descending (newest first) |
 | `transactions` | `block_number` ascending (chronological) |
 
-Each account record includes a `transactions` list (up to `--max-tx-per-account` entries) containing the transactions that account participated in during the scan range. `diff-test` uses these stored block numbers to query historical state without re-fetching transaction data from the RPC node.
+Each account record includes a `transactions` list (up to `--max-tx-per-account` entries) containing the transactions that account participated in during the scan range. `replay` uses these stored block numbers to query historical state without re-fetching transaction data from the RPC node.
 
 ---
 
@@ -668,14 +670,14 @@ rpcduel/
     ├── report/           Text & JSON report rendering
     ├── dataset/          Dataset types + Ethereum JSON-RPC chain scanner
     ├── benchgen/         Scenario generation & weighted request sampling
-    └── replay/           Data-driven diff-test engine
+    └── replay/           Data-driven replay engine
 ```
 
 **Key design decisions**
 
 - **Hex normalisation** — `"0x1a"` and `"26"` are treated as equal by the diff engine, avoiding false positives from encoding differences.
 - **Weighted dispatch** — `benchgen` assigns a weight to every scenario; `bench --input` samples requests proportionally, so realistic mixed traffic emerges without manual scripting.
-- **Archive-node detection** — `diff-test` recognises `missing trie node` / `state not found` errors and marks those requests as `unsupported` rather than counting them as mismatches.
+- **Archive-node detection** — `replay` recognises `missing trie node` / `state not found` errors and marks those requests as `unsupported` rather than counting them as mismatches.
 - **Graceful partial results** — network errors and API timeouts during dataset collection are logged as warnings; already-collected data is saved regardless.
 
 ---

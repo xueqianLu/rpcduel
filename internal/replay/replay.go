@@ -1,4 +1,4 @@
-// Package replay implements the diff-test logic: it loads a dataset, generates
+// Package replay implements the replay logic: it loads a dataset, generates
 // RPC calls per entity (account / transaction / block), runs them against two
 // endpoints concurrently, and categorises the differences.
 package replay
@@ -66,7 +66,7 @@ type FoundDiff struct {
 	Detail   string
 }
 
-// Result holds the aggregate outcome of a diff-test run.
+// Result holds the aggregate outcome of a replay run.
 type Result struct {
 	AccountsTested     int
 	TransactionsTested int
@@ -94,7 +94,7 @@ func (r *Result) Summary() map[DiffCategory]int {
 	return m
 }
 
-// Config holds the parameters for a diff-test run.
+// Config holds the parameters for a replay run.
 type Config struct {
 	EndpointA        string
 	EndpointB        string
@@ -104,7 +104,7 @@ type Config struct {
 	TraceBlock       bool
 }
 
-// Run executes the full diff-test suite against ds using concurrency goroutines.
+// Run executes the full replay suite against ds using concurrency goroutines.
 // If concurrency is <= 0 it defaults to 1.
 // progress, if non-nil, receives periodic one-line status updates written as
 // each batch of tasks completes (every progressInterval tasks and at the end).
@@ -419,9 +419,9 @@ func WriteResultCSV(w io.Writer, r *Result) error {
 	return cw.Error()
 }
 
-// PrintResult writes a human-readable diff-test summary.
+// PrintResult writes a human-readable replay summary.
 func PrintResult(w io.Writer, r *Result) {
-	fmt.Fprintf(w, "\nDiff-Test Result\n")
+	fmt.Fprintf(w, "\nReplay Result\n")
 	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 40))
 	fmt.Fprintf(w, "Accounts tested:     %d\n", r.AccountsTested)
 	fmt.Fprintf(w, "Transactions tested: %d\n", r.TransactionsTested)

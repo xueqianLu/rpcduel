@@ -16,7 +16,7 @@ var rootCmd = &cobra.Command{
   - Benchmarking RPC node performance (bench)
   - Running concurrent diff+benchmark tests (duel)
   - Collecting on-chain test datasets by scanning a block range via RPC (dataset)
-  - Data-driven consistency testing across nodes (diff-test)
+			- Replaying dataset-backed consistency checks across nodes (replay)
   - Generating benchmark scenario files from datasets (benchgen)`,
 }
 

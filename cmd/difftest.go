@@ -14,8 +14,9 @@ import (
 )
 
 var diffTestCmd = &cobra.Command{
-	Use:   "diff-test",
-	Short: "Run data-driven consistency tests between two RPC endpoints using a dataset",
+	Use:     "replay",
+	Aliases: []string{"diff-test"},
+	Short:   "Replay dataset-backed RPC calls across two endpoints and compare the results",
 	Long: `Load a dataset file (created with rpcduel dataset) and execute RPC calls
 for each account, transaction, and block against two endpoints, reporting any
 response differences.`,
@@ -69,7 +70,7 @@ func runDiffTest(cmd *cobra.Command, args []string) error {
 		opts.IgnoreFields[f] = true
 	}
 
-	fmt.Fprintf(os.Stderr, "Running diff-test on dataset (accounts=%d txs=%d blocks=%d)...\n",
+	fmt.Fprintf(os.Stderr, "Running replay on dataset (accounts=%d txs=%d blocks=%d)...\n",
 		len(ds.Accounts), len(ds.Transactions), len(ds.Blocks))
 
 	ctx := context.Background()
@@ -82,7 +83,7 @@ func runDiffTest(cmd *cobra.Command, args []string) error {
 		TraceBlock:       diffTestTraceBlock,
 	}, diffTestConcurrency, os.Stderr)
 	if err != nil {
-		return fmt.Errorf("diff-test: %w", err)
+		return fmt.Errorf("replay: %w", err)
 	}
 
 	// Write to stdout.
@@ -114,7 +115,7 @@ func runDiffTest(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// printResult writes the diff-test result to w in the requested format.
+// printResult writes the replay result to w in the requested format.
 func printResult(w io.Writer, result *replay.Result, format string) {
 	if format == "json" {
 		replay.PrintResultJSON(w, result)
