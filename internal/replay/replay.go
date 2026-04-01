@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -26,14 +27,14 @@ const progressInterval = 100
 type DiffCategory string
 
 const (
-	CategoryBalance DiffCategory = "balance_mismatch"
-	CategoryNonce   DiffCategory = "nonce_mismatch"
-	CategoryTx      DiffCategory = "tx_mismatch"
-	CategoryReceipt DiffCategory = "receipt_mismatch"
-	CategoryTrace   DiffCategory = "trace_mismatch"
-	CategoryMissing DiffCategory = "missing_data"
+	CategoryBalance  DiffCategory = "balance_mismatch"
+	CategoryNonce    DiffCategory = "nonce_mismatch"
+	CategoryTx       DiffCategory = "tx_mismatch"
+	CategoryReceipt  DiffCategory = "receipt_mismatch"
+	CategoryTrace    DiffCategory = "trace_mismatch"
+	CategoryMissing  DiffCategory = "missing_data"
 	CategoryRPCError DiffCategory = "rpc_error"
-	CategoryBlock   DiffCategory = "block_mismatch"
+	CategoryBlock    DiffCategory = "block_mismatch"
 )
 
 // archiveErrors is the set of substrings that indicate an archive/pruned node.
@@ -95,24 +96,26 @@ func (r *Result) Summary() map[DiffCategory]int {
 
 // Config holds the parameters for a diff-test run.
 type Config struct {
-	EndpointA       string
-	EndpointB       string
-	MaxTxPerAccount int
-	DiffOpts        diff.Options
+	EndpointA        string
+	EndpointB        string
+	MaxTxPerAccount  int
+	DiffOpts         diff.Options
+	TraceTransaction bool
+	TraceBlock       bool
 }
 
 // Run executes the full diff-test suite against ds using concurrency goroutines.
 // If concurrency is <= 0 it defaults to 1.
 // progress, if non-nil, receives periodic one-line status updates written as
 // each batch of tasks completes (every progressInterval tasks and at the end).
-func Run(ctx context.Context, ds *dataset.Dataset, epA, epB string, maxTxPerAccount int, concurrency int, opts diff.Options, progress io.Writer) (*Result, error) {
+func Run(ctx context.Context, ds *dataset.Dataset, cfg Config, concurrency int, progress io.Writer) (*Result, error) {
 	if concurrency <= 0 {
 		concurrency = 1
 	}
 
 	const requestTimeout = 30 * time.Second
-	cA := rpc.NewClient(epA, requestTimeout)
-	cB := rpc.NewClient(epB, requestTimeout)
+	cA := rpc.NewClient(cfg.EndpointA, requestTimeout)
+	cB := rpc.NewClient(cfg.EndpointB, requestTimeout)
 
 	result := &Result{
 		AccountsTested:     len(ds.Accounts),
@@ -123,8 +126,16 @@ func Run(ctx context.Context, ds *dataset.Dataset, epA, epB string, maxTxPerAcco
 	// Build a lookup: address → list of block numbers from dataset transactions.
 	// Used as fallback when Account.Transactions is not populated (older datasets).
 	addrBlocks := make(map[string][]int64)
+	addrBlockSeen := make(map[string]map[int64]bool)
 	for _, tx := range ds.Transactions {
-		addrBlocks[strings.ToLower(tx.From)] = append(addrBlocks[strings.ToLower(tx.From)], tx.BlockNumber)
+		addr := strings.ToLower(tx.From)
+		if addrBlockSeen[addr] == nil {
+			addrBlockSeen[addr] = make(map[int64]bool)
+		}
+		if !addrBlockSeen[addr][tx.BlockNumber] {
+			addrBlockSeen[addr][tx.BlockNumber] = true
+			addrBlocks[addr] = append(addrBlocks[addr], tx.BlockNumber)
+		}
 	}
 
 	type rpcTask struct {
@@ -135,6 +146,20 @@ func Run(ctx context.Context, ds *dataset.Dataset, epA, epB string, maxTxPerAcco
 
 	// Build the full ordered task list.
 	var tasks []rpcTask
+	seenTasks := make(map[string]bool)
+	addTask := func(method string, params []interface{}, cat DiffCategory) {
+		key, err := taskKey(method, params)
+		if err != nil {
+			// Should not happen for the small JSON-compatible param shapes used here.
+			// Fall back to a simple fmt-based key so we do not silently drop coverage.
+			key = fmt.Sprintf("%s|%v", method, params)
+		}
+		if seenTasks[key] {
+			return
+		}
+		seenTasks[key] = true
+		tasks = append(tasks, rpcTask{method: method, params: params, cat: cat})
+	}
 
 	// 1. Account dimension: eth_getBalance + eth_getTransactionCount
 	for _, account := range ds.Accounts {
@@ -155,8 +180,8 @@ func Run(ctx context.Context, ds *dataset.Dataset, epA, epB string, maxTxPerAcco
 			blockNums = addrBlocks[strings.ToLower(addr)]
 		}
 
-		if maxTxPerAccount > 0 && len(blockNums) > maxTxPerAccount {
-			blockNums = blockNums[:maxTxPerAccount]
+		if cfg.MaxTxPerAccount > 0 && len(blockNums) > cfg.MaxTxPerAccount {
+			blockNums = blockNums[:cfg.MaxTxPerAccount]
 		}
 		if len(blockNums) == 0 {
 			blockNums = []int64{-1} // -1 sentinel → use "latest"
@@ -169,22 +194,28 @@ func Run(ctx context.Context, ds *dataset.Dataset, epA, epB string, maxTxPerAcco
 				blockParam = fmt.Sprintf("0x%x", bn)
 			}
 			params := []interface{}{addr, blockParam}
-			tasks = append(tasks, rpcTask{"eth_getBalance", params, CategoryBalance})
-			tasks = append(tasks, rpcTask{"eth_getTransactionCount", params, CategoryNonce})
+			addTask("eth_getBalance", params, CategoryBalance)
+			addTask("eth_getTransactionCount", params, CategoryNonce)
 		}
 	}
 
 	// 2. Transaction dimension: eth_getTransactionByHash + eth_getTransactionReceipt
 	for _, tx := range ds.Transactions {
 		params := []interface{}{tx.Hash}
-		tasks = append(tasks, rpcTask{"eth_getTransactionByHash", params, CategoryTx})
-		tasks = append(tasks, rpcTask{"eth_getTransactionReceipt", params, CategoryReceipt})
+		addTask("eth_getTransactionByHash", params, CategoryTx)
+		addTask("eth_getTransactionReceipt", params, CategoryReceipt)
+		if cfg.TraceTransaction {
+			addTask("debug_traceTransaction", []interface{}{tx.Hash, map[string]interface{}{}}, CategoryTrace)
+		}
 	}
 
-	// 3. Block dimension: eth_getBlockByNumber
+	// 3. Block dimension: eth_getBlockByNumber + debug_traceBlockByNumber
 	for _, block := range ds.Blocks {
-		params := []interface{}{fmt.Sprintf("0x%x", block.Number), false}
-		tasks = append(tasks, rpcTask{"eth_getBlockByNumber", params, CategoryBlock})
+		hexNumber := fmt.Sprintf("0x%x", block.Number)
+		addTask("eth_getBlockByNumber", []interface{}{hexNumber, false}, CategoryBlock)
+		if cfg.TraceBlock {
+			addTask("debug_traceBlockByNumber", []interface{}{hexNumber, map[string]interface{}{}}, CategoryTrace)
+		}
 	}
 
 	taskCh := make(chan rpcTask, len(tasks))
@@ -201,7 +232,7 @@ func Run(ctx context.Context, ds *dataset.Dataset, epA, epB string, maxTxPerAcco
 		go func() {
 			defer wg.Done()
 			for t := range taskCh {
-				outCh <- callAndDiff(ctx, cA, cB, t.method, t.params, opts, t.cat)
+				outCh <- callAndDiff(ctx, cA, cB, t.method, t.params, cfg.DiffOpts, t.cat)
 			}
 		}()
 	}
@@ -308,6 +339,58 @@ func isNull(resp *rpc.Response) bool {
 	}
 	s := strings.TrimSpace(string(resp.Result))
 	return s == "" || s == "null"
+}
+
+func taskKey(method string, params []interface{}) (string, error) {
+	canonical, err := canonicalJSON(params)
+	if err != nil {
+		return "", err
+	}
+	return method + "|" + canonical, nil
+}
+
+func canonicalJSON(v interface{}) (string, error) {
+	b, err := marshalCanonical(v)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func marshalCanonical(v interface{}) ([]byte, error) {
+	switch x := v.(type) {
+	case map[string]interface{}:
+		keys := make([]string, 0, len(x))
+		for k := range x {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			keyJSON, err := json.Marshal(k)
+			if err != nil {
+				return nil, err
+			}
+			valJSON, err := marshalCanonical(x[k])
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, string(keyJSON)+":"+string(valJSON))
+		}
+		return []byte("{" + strings.Join(parts, ",") + "}"), nil
+	case []interface{}:
+		parts := make([]string, 0, len(x))
+		for _, item := range x {
+			itemJSON, err := marshalCanonical(item)
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, string(itemJSON))
+		}
+		return []byte("[" + strings.Join(parts, ",") + "]"), nil
+	default:
+		return json.Marshal(v)
+	}
 }
 
 // maxSampleDiffs is the maximum number of sample diffs included in reports.

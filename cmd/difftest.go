@@ -23,15 +23,17 @@ response differences.`,
 }
 
 var (
-	diffTestDataset         string
-	diffTestRPCs            []string
-	diffTestMaxTxPerAccount int
-	diffTestOutput          string
-	diffTestIgnoreFields    []string
-	diffTestTimeout         time.Duration
-	diffTestConcurrency     int
-	diffTestReport          string
-	diffTestCSV             string
+	diffTestDataset          string
+	diffTestRPCs             []string
+	diffTestMaxTxPerAccount  int
+	diffTestTraceTransaction bool
+	diffTestTraceBlock       bool
+	diffTestOutput           string
+	diffTestIgnoreFields     []string
+	diffTestTimeout          time.Duration
+	diffTestConcurrency      int
+	diffTestReport           string
+	diffTestCSV              string
 )
 
 func init() {
@@ -39,6 +41,10 @@ func init() {
 	diffTestCmd.Flags().StringArrayVar(&diffTestRPCs, "rpc", nil, "RPC endpoint URL (specify exactly 2)")
 	diffTestCmd.Flags().IntVar(&diffTestMaxTxPerAccount, "max-tx-per-account", 100,
 		"Maximum transactions to test per account (0 = unlimited)")
+	diffTestCmd.Flags().BoolVar(&diffTestTraceTransaction, "trace-transaction", false,
+		"Also compare debug_traceTransaction for dataset transactions")
+	diffTestCmd.Flags().BoolVar(&diffTestTraceBlock, "trace-block", false,
+		"Also compare debug_traceBlockByNumber for dataset blocks")
 	diffTestCmd.Flags().StringVar(&diffTestOutput, "output", "text", "Output format: text or json")
 	diffTestCmd.Flags().StringArrayVar(&diffTestIgnoreFields, "ignore-field", nil,
 		"JSON field names to ignore in comparison")
@@ -67,7 +73,14 @@ func runDiffTest(cmd *cobra.Command, args []string) error {
 		len(ds.Accounts), len(ds.Transactions), len(ds.Blocks))
 
 	ctx := context.Background()
-	result, err := replay.Run(ctx, ds, diffTestRPCs[0], diffTestRPCs[1], diffTestMaxTxPerAccount, diffTestConcurrency, opts, os.Stderr)
+	result, err := replay.Run(ctx, ds, replay.Config{
+		EndpointA:        diffTestRPCs[0],
+		EndpointB:        diffTestRPCs[1],
+		MaxTxPerAccount:  diffTestMaxTxPerAccount,
+		DiffOpts:         opts,
+		TraceTransaction: diffTestTraceTransaction,
+		TraceBlock:       diffTestTraceBlock,
+	}, diffTestConcurrency, os.Stderr)
 	if err != nil {
 		return fmt.Errorf("diff-test: %w", err)
 	}

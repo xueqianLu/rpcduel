@@ -90,3 +90,16 @@ func TestMetrics_Scenario(t *testing.T) {
 		t.Errorf("expected scenario 'balance', got %q", s.Scenario)
 	}
 }
+
+func TestMetrics_ExplicitWindow(t *testing.T) {
+	start := time.Unix(100, 0)
+	end := start.Add(2 * time.Second)
+	m := bench.NewMetricsAt("http://ep", start)
+	m.Record(100*time.Millisecond, false)
+	m.Record(100*time.Millisecond, false)
+	m.FinishAt(end)
+	s := m.Summarize()
+	if s.QPS < 0.99 || s.QPS > 1.01 {
+		t.Fatalf("expected QPS ~1.0 over explicit 2s window, got %f", s.QPS)
+	}
+}

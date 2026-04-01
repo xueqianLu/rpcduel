@@ -3,6 +3,7 @@ package report_test
 import (
 	"bytes"
 	"encoding/csv"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -131,5 +132,83 @@ func TestPrintBench_ShowsScenario(t *testing.T) {
 	}
 	if !strings.Contains(out, "Scenario:") {
 		t.Error("expected 'Scenario:' label in text output")
+	}
+}
+
+func TestPrintCall_TextSuccess(t *testing.T) {
+	rep := report.CallReport{
+		Endpoint:  "https://rpc.example.com",
+		Method:    "eth_getBalance",
+		Params:    []interface{}{"0xabc", "latest"},
+		Success:   true,
+		LatencyMS: 12.345,
+		Result:    json.RawMessage(`"0x123"`),
+	}
+
+	var buf bytes.Buffer
+	report.PrintCall(&buf, rep, report.FormatText)
+	out := buf.String()
+
+	for _, want := range []string{"RPC Call Result", "eth_getBalance", "https://rpc.example.com", "Params:", "Result:", `"0x123"`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected text output to contain %q, got: %s", want, out)
+		}
+	}
+}
+
+func TestPrintCall_TextError(t *testing.T) {
+	code := -32000
+	rep := report.CallReport{
+		Endpoint:  "https://rpc.example.com",
+		Method:    "debug_traceTransaction",
+		Params:    []interface{}{"0xdeadbeef"},
+		Success:   false,
+		LatencyMS: 8.5,
+		Error: &report.CallError{
+			Type:    "rpc",
+			Code:    &code,
+			Message: "execution reverted",
+		},
+	}
+
+	var buf bytes.Buffer
+	report.PrintCall(&buf, rep, report.FormatText)
+	out := buf.String()
+
+	for _, want := range []string{"Error:", "[rpc]", "code=-32000", "execution reverted"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected error text output to contain %q, got: %s", want, out)
+		}
+	}
+}
+
+func TestPrintCall_JSON(t *testing.T) {
+	rep := report.CallReport{
+		Endpoint:  "https://rpc.example.com",
+		Method:    "eth_blockNumber",
+		Params:    []interface{}{},
+		Success:   true,
+		LatencyMS: 1.234,
+		Result:    json.RawMessage(`"0x1"`),
+	}
+
+	var buf bytes.Buffer
+	report.PrintCall(&buf, rep, report.FormatJSON)
+
+	var got map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal JSON output: %v", err)
+	}
+	if got["endpoint"] != rep.Endpoint {
+		t.Fatalf("expected endpoint %q, got %v", rep.Endpoint, got["endpoint"])
+	}
+	if got["method"] != rep.Method {
+		t.Fatalf("expected method %q, got %v", rep.Method, got["method"])
+	}
+	if got["success"] != true {
+		t.Fatalf("expected success=true, got %v", got["success"])
+	}
+	if got["result"] != "0x1" {
+		t.Fatalf("expected result 0x1, got %v", got["result"])
 	}
 }

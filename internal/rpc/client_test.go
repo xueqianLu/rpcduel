@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -83,5 +84,44 @@ func TestParseParams_Invalid(t *testing.T) {
 	_, err := rpc.ParseParams(`not json`)
 	if err == nil {
 		t.Error("expected error for invalid JSON")
+	}
+}
+
+func TestParsePositionalParams_PlainStrings(t *testing.T) {
+	params, err := rpc.ParsePositionalParams([]string{"0xa11111", "latest"})
+	if err != nil {
+		t.Fatalf("ParsePositionalParams: %v", err)
+	}
+	want := []interface{}{"0xa11111", "latest"}
+	if !reflect.DeepEqual(params, want) {
+		t.Fatalf("expected %v, got %v", want, params)
+	}
+}
+
+func TestParsePositionalParams_JSONLiterals(t *testing.T) {
+	params, err := rpc.ParsePositionalParams([]string{"true", "null", "123", `{"k":1}`, `[1,2]`})
+	if err != nil {
+		t.Fatalf("ParsePositionalParams: %v", err)
+	}
+
+	if got, ok := params[0].(bool); !ok || !got {
+		t.Fatalf("expected bool true, got %#v", params[0])
+	}
+	if params[1] != nil {
+		t.Fatalf("expected nil, got %#v", params[1])
+	}
+	if got, ok := params[2].(json.Number); !ok || got.String() != "123" {
+		t.Fatalf("expected json.Number(123), got %#v", params[2])
+	}
+	obj, ok := params[3].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected object param, got %#v", params[3])
+	}
+	if got, ok := obj["k"].(json.Number); !ok || got.String() != "1" {
+		t.Fatalf("expected object field json.Number(1), got %#v", obj["k"])
+	}
+	arr, ok := params[4].([]interface{})
+	if !ok || len(arr) != 2 {
+		t.Fatalf("expected array param, got %#v", params[4])
 	}
 }

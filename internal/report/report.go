@@ -2,10 +2,12 @@
 package report
 
 import (
+	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -24,10 +26,10 @@ const (
 
 // DiffReport is the output for the diff command.
 type DiffReport struct {
-	Endpoints []string         `json:"endpoints"`
-	Method    string           `json:"method"`
-	Total     int              `json:"total"`
-	DiffCount int              `json:"diff_count"`
+	Endpoints []string          `json:"endpoints"`
+	Method    string            `json:"method"`
+	Total     int               `json:"total"`
+	DiffCount int               `json:"diff_count"`
 	Diffs     []diff.Difference `json:"diffs,omitempty"`
 }
 
@@ -36,15 +38,33 @@ type BenchReport struct {
 	Summaries []bench.Summary `json:"summaries"`
 }
 
+// CallError describes a failed RPC call.
+type CallError struct {
+	Type    string `json:"type"`
+	Code    *int   `json:"code,omitempty"`
+	Message string `json:"message"`
+}
+
+// CallReport is the output for the call command.
+type CallReport struct {
+	Endpoint  string          `json:"endpoint"`
+	Method    string          `json:"method"`
+	Params    []interface{}   `json:"params"`
+	Success   bool            `json:"success"`
+	LatencyMS float64         `json:"latency_ms"`
+	Result    json.RawMessage `json:"result,omitempty"`
+	Error     *CallError      `json:"error,omitempty"`
+}
+
 // DuelReport combines diff and bench results.
 type DuelReport struct {
-	Endpoints []string         `json:"endpoints"`
-	Method    string           `json:"method"`
-	Total     int              `json:"total"`
-	DiffCount int              `json:"diff_count"`
-	DiffRate  float64          `json:"diff_rate"`
+	Endpoints []string          `json:"endpoints"`
+	Method    string            `json:"method"`
+	Total     int               `json:"total"`
+	DiffCount int               `json:"diff_count"`
+	DiffRate  float64           `json:"diff_rate"`
 	Diffs     []diff.Difference `json:"diffs,omitempty"`
-	Metrics   []bench.Summary  `json:"metrics"`
+	Metrics   []bench.Summary   `json:"metrics"`
 }
 
 // PrintDiff writes a diff report to the given writer.
@@ -100,6 +120,42 @@ func PrintBench(w io.Writer, r BenchReport, format Format) {
 			fmt.Fprintf(w, "  Max:      %s\n", s.Max)
 		}
 		fmt.Fprintln(w)
+	}
+}
+
+// PrintCall writes a single RPC call report to the given writer.
+func PrintCall(w io.Writer, r CallReport, format Format) {
+	if format == FormatJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(r)
+		return
+	}
+
+	fmt.Fprintf(w, "\nRPC Call Result\n")
+	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 40))
+	fmt.Fprintf(w, "Endpoint: %s\n", r.Endpoint)
+	fmt.Fprintf(w, "Method:   %s\n", r.Method)
+	if !math.IsNaN(r.LatencyMS) && !math.IsInf(r.LatencyMS, 0) && r.LatencyMS > 0 {
+		fmt.Fprintf(w, "Latency:  %.3fms\n", r.LatencyMS)
+	}
+
+	if params := formatJSON(r.Params); params != "" {
+		fmt.Fprintf(w, "Params:\n%s\n", indentBlock(params, "  "))
+	}
+
+	if r.Error != nil {
+		fmt.Fprintf(w, "Error:\n")
+		if r.Error.Code != nil {
+			fmt.Fprintf(w, "  [%s] code=%d message=%s\n", r.Error.Type, *r.Error.Code, r.Error.Message)
+		} else {
+			fmt.Fprintf(w, "  [%s] %s\n", r.Error.Type, r.Error.Message)
+		}
+		return
+	}
+
+	if result := formatRawJSON(r.Result); result != "" {
+		fmt.Fprintf(w, "Result:\n%s\n", indentBlock(result, "  "))
 	}
 }
 
@@ -173,4 +229,30 @@ func PrintDuel(w io.Writer, r DuelReport, format Format) {
 			fmt.Fprintf(w, "  %s\n", d.String())
 		}
 	}
+}
+
+func formatJSON(v interface{}) string {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func formatRawJSON(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, raw, "", "  "); err == nil {
+		return buf.String()
+	}
+	return string(raw)
+}
+
+func indentBlock(s, prefix string) string {
+	if s == "" {
+		return ""
+	}
+	return prefix + strings.ReplaceAll(s, "\n", "\n"+prefix)
 }

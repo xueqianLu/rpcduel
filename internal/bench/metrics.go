@@ -22,9 +22,14 @@ type Metrics struct {
 
 // NewMetrics creates a new Metrics for the given endpoint.
 func NewMetrics(endpoint string) *Metrics {
+	return NewMetricsAt(endpoint, time.Now())
+}
+
+// NewMetricsAt creates a new Metrics using an explicit benchmark start time.
+func NewMetricsAt(endpoint string, start time.Time) *Metrics {
 	return &Metrics{
 		Endpoint:  endpoint,
-		StartTime: time.Now(),
+		StartTime: start,
 	}
 }
 
@@ -45,7 +50,12 @@ func (m *Metrics) Record(latency time.Duration, isError bool) {
 
 // Finish marks the end of the benchmark.
 func (m *Metrics) Finish() {
-	m.EndTime = time.Now()
+	m.FinishAt(time.Now())
+}
+
+// FinishAt marks the end of the benchmark using an explicit timestamp.
+func (m *Metrics) FinishAt(end time.Time) {
+	m.EndTime = end
 }
 
 // Duration returns the total elapsed time.
@@ -103,7 +113,7 @@ func (m *Metrics) Percentile(p float64) time.Duration {
 // Summary is a snapshot of computed metrics.
 type Summary struct {
 	Endpoint   string
-	Scenario   string        // non-empty when per-scenario tracking is used
+	Scenario   string // non-empty when per-scenario tracking is used
 	Total      int
 	Errors     int
 	ErrorRate  float64

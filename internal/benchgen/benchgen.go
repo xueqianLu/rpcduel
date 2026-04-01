@@ -7,9 +7,16 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"strings"
 
 	"github.com/xueqianLu/rpcduel/internal/dataset"
 )
+
+// Options controls which scenarios are generated.
+type Options struct {
+	TraceTransaction bool
+	TraceBlock       bool
+}
 
 // Request is a single JSON-RPC request in a scenario.
 type Request struct {
@@ -61,6 +68,27 @@ type TaggedRequest struct {
 	Scenario string
 }
 
+type scenarioEntry struct {
+	s          *Scenario
+	cumulative float64
+}
+
+// WeightedSampler samples requests from scenarios according to their weights.
+type WeightedSampler struct {
+	entries []scenarioEntry
+	flat    []Request
+	total   float64
+	rng     *rand.Rand
+}
+
+// WeightedTaggedSampler is like WeightedSampler but preserves the scenario name.
+type WeightedTaggedSampler struct {
+	entries []scenarioEntry
+	flat    []Request
+	total   float64
+	rng     *rand.Rand
+}
+
 // FlattenRequests returns all requests from all scenarios as a flat slice.
 func (bf *BenchFile) FlattenRequests() []Request {
 	var out []Request
@@ -70,57 +98,35 @@ func (bf *BenchFile) FlattenRequests() []Request {
 	return out
 }
 
+// NewWeightedSampler creates a request sampler distributed by scenario weight.
+func (bf *BenchFile) NewWeightedSampler(rng *rand.Rand) *WeightedSampler {
+	entries, total := buildScenarioEntries(bf)
+	return &WeightedSampler{
+		entries: entries,
+		flat:    bf.FlattenRequests(),
+		total:   total,
+		rng:     defaultRNG(rng),
+	}
+}
+
+// NewWeightedTaggedSampler creates a tagged request sampler distributed by scenario weight.
+func (bf *BenchFile) NewWeightedTaggedSampler(rng *rand.Rand) *WeightedTaggedSampler {
+	entries, total := buildScenarioEntries(bf)
+	return &WeightedTaggedSampler{
+		entries: entries,
+		flat:    bf.FlattenRequests(),
+		total:   total,
+		rng:     defaultRNG(rng),
+	}
+}
+
 // WeightedTaggedRequests is like WeightedRequests but each returned element
 // also carries the name of the scenario it was drawn from.
 func (bf *BenchFile) WeightedTaggedRequests(n int, rng *rand.Rand) []TaggedRequest {
-	if rng == nil {
-		rng = rand.New(rand.NewSource(42))
-	}
-
-	type scenarioEntry struct {
-		s          *Scenario
-		cumulative float64
-	}
-	var entries []scenarioEntry
-	total := 0.0
-	for i := range bf.Scenarios {
-		s := &bf.Scenarios[i]
-		if len(s.Requests) == 0 {
-			continue
-		}
-		w := s.Weight
-		if w <= 0 {
-			continue
-		}
-		total += w
-		entries = append(entries, scenarioEntry{s: s, cumulative: total})
-	}
-
-	if total == 0 || len(entries) == 0 {
-		flat := bf.FlattenRequests()
-		if len(flat) == 0 {
-			return nil
-		}
-		out := make([]TaggedRequest, n)
-		for i := range out {
-			out[i] = TaggedRequest{Request: flat[i%len(flat)]}
-		}
-		return out
-	}
-
+	sampler := bf.NewWeightedTaggedSampler(rng)
 	out := make([]TaggedRequest, n)
 	for i := range out {
-		r := rng.Float64() * total
-		for _, e := range entries {
-			if r <= e.cumulative {
-				reqs := e.s.Requests
-				out[i] = TaggedRequest{
-					Request:  reqs[rng.Intn(len(reqs))],
-					Scenario: e.s.Name,
-				}
-				break
-			}
-		}
+		out[i] = sampler.Next()
 	}
 	return out
 }
@@ -129,59 +135,60 @@ func (bf *BenchFile) WeightedTaggedRequests(n int, rng *rand.Rand) []TaggedReque
 // according to each scenario's Weight. Scenarios with zero weight are skipped.
 // If the total weight is zero, it falls back to FlattenRequests.
 func (bf *BenchFile) WeightedRequests(n int, rng *rand.Rand) []Request {
-	if rng == nil {
-		rng = rand.New(rand.NewSource(42))
-	}
-
-	// Compute total weight of scenarios that have requests.
-	type scenarioEntry struct {
-		s          *Scenario
-		cumulative float64
-	}
-	var entries []scenarioEntry
-	total := 0.0
-	for i := range bf.Scenarios {
-		s := &bf.Scenarios[i]
-		if len(s.Requests) == 0 {
-			continue
-		}
-		w := s.Weight
-		if w <= 0 {
-			continue
-		}
-		total += w
-		entries = append(entries, scenarioEntry{s: s, cumulative: total})
-	}
-
-	if total == 0 || len(entries) == 0 {
-		flat := bf.FlattenRequests()
-		if len(flat) == 0 {
-			return nil
-		}
-		out := make([]Request, n)
-		for i := range out {
-			out[i] = flat[i%len(flat)]
-		}
-		return out
-	}
-
+	sampler := bf.NewWeightedSampler(rng)
 	out := make([]Request, n)
 	for i := range out {
-		r := rng.Float64() * total
-		for _, e := range entries {
-			if r <= e.cumulative {
-				reqs := e.s.Requests
-				out[i] = reqs[rng.Intn(len(reqs))]
-				break
-			}
-		}
+		out[i] = sampler.Next()
 	}
 	return out
+}
+
+// Next returns the next weighted request.
+func (s *WeightedSampler) Next() Request {
+	if s.total == 0 || len(s.entries) == 0 {
+		if len(s.flat) == 0 {
+			return Request{}
+		}
+		return s.flat[s.rng.Intn(len(s.flat))]
+	}
+	r := s.rng.Float64() * s.total
+	for _, e := range s.entries {
+		if r <= e.cumulative {
+			reqs := e.s.Requests
+			return reqs[s.rng.Intn(len(reqs))]
+		}
+	}
+	last := s.entries[len(s.entries)-1].s.Requests
+	return last[s.rng.Intn(len(last))]
+}
+
+// Next returns the next weighted tagged request.
+func (s *WeightedTaggedSampler) Next() TaggedRequest {
+	if s.total == 0 || len(s.entries) == 0 {
+		if len(s.flat) == 0 {
+			return TaggedRequest{}
+		}
+		return TaggedRequest{Request: s.flat[s.rng.Intn(len(s.flat))]}
+	}
+	r := s.rng.Float64() * s.total
+	for _, e := range s.entries {
+		if r <= e.cumulative {
+			reqs := e.s.Requests
+			return TaggedRequest{Request: reqs[s.rng.Intn(len(reqs))], Scenario: e.s.Name}
+		}
+	}
+	last := s.entries[len(s.entries)-1].s
+	return TaggedRequest{Request: last.Requests[s.rng.Intn(len(last.Requests))], Scenario: last.Name}
 }
 
 // Generate creates a BenchFile from the given dataset.
 // rng is used for mixing cold/hot account selection; pass nil for a default source.
 func Generate(ds *dataset.Dataset, rng *rand.Rand) *BenchFile {
+	return GenerateWithOptions(ds, rng, Options{})
+}
+
+// GenerateWithOptions creates a BenchFile from the given dataset.
+func GenerateWithOptions(ds *dataset.Dataset, rng *rand.Rand, opts Options) *BenchFile {
 	if rng == nil {
 		rng = rand.New(rand.NewSource(42))
 	}
@@ -269,14 +276,19 @@ func Generate(ds *dataset.Dataset, rng *rand.Rand) *BenchFile {
 	// eth_getLogs – query each block's range individually
 	{
 		s := Scenario{Name: "get_logs", Weight: 0.10}
+		logAddresses := logAddressesByBlock(ds)
 		for _, b := range ds.Blocks {
 			hex := fmt.Sprintf("0x%x", b.Number)
+			filter := map[string]interface{}{
+				"fromBlock": hex,
+				"toBlock":   hex,
+			}
+			if addr := logAddresses[b.Number]; addr != "" {
+				filter["address"] = addr
+			}
 			s.Requests = append(s.Requests, Request{
 				Method: "eth_getLogs",
-				Params: []interface{}{map[string]interface{}{
-					"fromBlock": hex,
-					"toBlock":   hex,
-				}},
+				Params: []interface{}{filter},
 			})
 		}
 		if len(s.Requests) > 0 {
@@ -284,42 +296,52 @@ func Generate(ds *dataset.Dataset, rng *rand.Rand) *BenchFile {
 		}
 	}
 
-	// debug_traceTransaction
-	{
-		s := Scenario{Name: "debug_trace_transaction", Weight: 0.10}
-		for _, tx := range ds.Transactions {
-			s.Requests = append(s.Requests, Request{
-				Method: "debug_traceTransaction",
-				Params: []interface{}{tx.Hash, map[string]interface{}{}},
-			})
-		}
-		if len(s.Requests) > 0 {
-			bf.Scenarios = append(bf.Scenarios, s)
-		}
-	}
-
-	// debug_traceBlockByNumber
-	{
-		s := Scenario{Name: "debug_trace_block", Weight: 0.05}
-		for _, b := range ds.Blocks {
-			s.Requests = append(s.Requests, Request{
-				Method: "debug_traceBlockByNumber",
-				Params: []interface{}{fmt.Sprintf("0x%x", b.Number), map[string]interface{}{}},
-			})
-		}
-		if len(s.Requests) > 0 {
-			bf.Scenarios = append(bf.Scenarios, s)
+	if opts.TraceTransaction {
+		// debug_traceTransaction
+		{
+			s := Scenario{Name: "debug_trace_transaction", Weight: 0.10}
+			for _, tx := range ds.Transactions {
+				s.Requests = append(s.Requests, Request{
+					Method: "debug_traceTransaction",
+					Params: []interface{}{tx.Hash, map[string]interface{}{}},
+				})
+			}
+			if len(s.Requests) > 0 {
+				bf.Scenarios = append(bf.Scenarios, s)
+			}
 		}
 	}
 
-	// Mixed scenario: shuffle accounts (hot + cold mix) for eth_getBalance
+	if opts.TraceBlock {
+		// debug_traceBlockByNumber
+		{
+			s := Scenario{Name: "debug_trace_block", Weight: 0.05}
+			for _, b := range ds.Blocks {
+				s.Requests = append(s.Requests, Request{
+					Method: "debug_traceBlockByNumber",
+					Params: []interface{}{fmt.Sprintf("0x%x", b.Number), map[string]interface{}{}},
+				})
+			}
+			if len(s.Requests) > 0 {
+				bf.Scenarios = append(bf.Scenarios, s)
+			}
+		}
+	}
+
+	// Mixed scenario: shuffled accounts queried at historical block heights,
+	// which avoids duplicating the plain latest-balance scenario.
 	{
 		s := Scenario{Name: "mixed_balance", Weight: 0.05}
 		accounts := make([]dataset.Account, len(ds.Accounts))
 		copy(accounts, ds.Accounts)
 		rng.Shuffle(len(accounts), func(i, j int) { accounts[i], accounts[j] = accounts[j], accounts[i] })
+		historical := historicalAccountBlocks(ds)
 		for _, a := range accounts {
-			blockParam := "latest"
+			blocks := historical[strings.ToLower(a.Address)]
+			if len(blocks) == 0 {
+				continue
+			}
+			blockParam := fmt.Sprintf("0x%x", blocks[rng.Intn(len(blocks))])
 			s.Requests = append(s.Requests, Request{
 				Method: "eth_getBalance",
 				Params: []interface{}{a.Address, blockParam},
@@ -331,4 +353,78 @@ func Generate(ds *dataset.Dataset, rng *rand.Rand) *BenchFile {
 	}
 
 	return bf
+}
+
+func defaultRNG(rng *rand.Rand) *rand.Rand {
+	if rng == nil {
+		return rand.New(rand.NewSource(42))
+	}
+	return rng
+}
+
+func buildScenarioEntries(bf *BenchFile) ([]scenarioEntry, float64) {
+	var entries []scenarioEntry
+	total := 0.0
+	for i := range bf.Scenarios {
+		s := &bf.Scenarios[i]
+		if len(s.Requests) == 0 || s.Weight <= 0 {
+			continue
+		}
+		total += s.Weight
+		entries = append(entries, scenarioEntry{s: s, cumulative: total})
+	}
+	return entries, total
+}
+
+func historicalAccountBlocks(ds *dataset.Dataset) map[string][]int64 {
+	seen := make(map[string]map[int64]bool)
+	out := make(map[string][]int64)
+	add := func(addr string, block int64) {
+		addr = strings.ToLower(addr)
+		if addr == "" || block <= 0 {
+			return
+		}
+		if seen[addr] == nil {
+			seen[addr] = make(map[int64]bool)
+		}
+		if seen[addr][block] {
+			return
+		}
+		seen[addr][block] = true
+		out[addr] = append(out[addr], block)
+	}
+
+	for _, a := range ds.Accounts {
+		for _, tx := range a.Transactions {
+			add(a.Address, tx.BlockNumber)
+		}
+	}
+	for _, tx := range ds.Transactions {
+		add(tx.From, tx.BlockNumber)
+		add(tx.To, tx.BlockNumber)
+	}
+	return out
+}
+
+func logAddressesByBlock(ds *dataset.Dataset) map[int64]string {
+	seen := make(map[int64]map[string]bool)
+	out := make(map[int64]string)
+	for _, tx := range ds.Transactions {
+		addr := strings.TrimSpace(tx.To)
+		if addr == "" {
+			continue
+		}
+		lower := strings.ToLower(addr)
+		if seen[tx.BlockNumber] == nil {
+			seen[tx.BlockNumber] = make(map[string]bool)
+		}
+		if seen[tx.BlockNumber][lower] {
+			continue
+		}
+		seen[tx.BlockNumber][lower] = true
+		if out[tx.BlockNumber] == "" {
+			out[tx.BlockNumber] = addr
+		}
+	}
+	return out
 }
