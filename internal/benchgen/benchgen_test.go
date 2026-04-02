@@ -1,6 +1,8 @@
 package benchgen_test
 
 import (
+	"fmt"
+	"math/rand"
 	"testing"
 
 	"github.com/xueqianLu/rpcduel/internal/benchgen"
@@ -9,11 +11,11 @@ import (
 
 func sampleDataset() *dataset.Dataset {
 	return &dataset.Dataset{
-		Meta: dataset.Meta{Chain: "test"},
+		Meta:  dataset.Meta{Chain: "test"},
 		Range: dataset.Range{From: 100, To: 200},
 		Accounts: []dataset.Account{
-			{Address: "0xaaa", TxCount: 10},
-			{Address: "0xbbb", TxCount: 5},
+			{Address: "0xaaa", TxCount: 10, Transactions: []dataset.Transaction{{Hash: "0xtx1", BlockNumber: 150, From: "0xaaa", To: "0xbbb"}}},
+			{Address: "0xbbb", TxCount: 5, Transactions: []dataset.Transaction{{Hash: "0xtx2", BlockNumber: 160, From: "0xbbb", To: "0xaaa"}}},
 		},
 		Transactions: []dataset.Transaction{
 			{Hash: "0xtx1", BlockNumber: 150, From: "0xaaa", To: "0xbbb"},
@@ -27,7 +29,7 @@ func sampleDataset() *dataset.Dataset {
 }
 
 func TestGenerate_Scenarios(t *testing.T) {
-	bf := benchgen.Generate(sampleDataset(), nil)
+	bf := benchgen.GenerateWithOptions(sampleDataset(), nil, benchgen.Options{TraceTransaction: true, TraceBlock: true})
 
 	if len(bf.Scenarios) == 0 {
 		t.Fatal("expected at least one scenario")
@@ -43,7 +45,7 @@ func TestGenerate_Scenarios(t *testing.T) {
 		names[s.Name] = true
 	}
 	required := []string{"balance", "transaction_by_hash", "transaction_receipt",
-		"block_by_number", "get_logs", "debug_trace_transaction"}
+		"block_by_number", "get_logs", "debug_trace_transaction", "debug_trace_block", "mixed_balance"}
 	for _, req := range required {
 		if !names[req] {
 			t.Errorf("expected scenario %q not found", req)
@@ -52,7 +54,7 @@ func TestGenerate_Scenarios(t *testing.T) {
 }
 
 func TestGenerate_Weights(t *testing.T) {
-	bf := benchgen.Generate(sampleDataset(), nil)
+	bf := benchgen.GenerateWithOptions(sampleDataset(), nil, benchgen.Options{TraceTransaction: true, TraceBlock: true})
 
 	totalWeight := 0.0
 	for _, s := range bf.Scenarios {
@@ -68,7 +70,7 @@ func TestGenerate_Weights(t *testing.T) {
 }
 
 func TestGenerate_Requests(t *testing.T) {
-	bf := benchgen.Generate(sampleDataset(), nil)
+	bf := benchgen.GenerateWithOptions(sampleDataset(), nil, benchgen.Options{TraceTransaction: true, TraceBlock: true})
 
 	for _, s := range bf.Scenarios {
 		if len(s.Requests) == 0 {
@@ -91,7 +93,7 @@ func TestFlattenRequests(t *testing.T) {
 }
 
 func TestSaveLoadBenchFile(t *testing.T) {
-	bf := benchgen.Generate(sampleDataset(), nil)
+	bf := benchgen.GenerateWithOptions(sampleDataset(), nil, benchgen.Options{TraceTransaction: true, TraceBlock: true})
 	path := t.TempDir() + "/bench.json"
 
 	if err := benchgen.SaveBenchFile(path, bf); err != nil {
@@ -121,6 +123,133 @@ func TestWeightedRequests(t *testing.T) {
 	for _, r := range reqs {
 		if r.Method == "" {
 			t.Error("weighted request has empty method")
+		}
+	}
+}
+
+func TestWeightedTaggedRequests(t *testing.T) {
+	bf := benchgen.GenerateWithOptions(sampleDataset(), nil, benchgen.Options{TraceTransaction: true, TraceBlock: true})
+	n := 100
+	tagged := bf.WeightedTaggedRequests(n, nil)
+	if len(tagged) != n {
+		t.Errorf("expected %d tagged requests, got %d", n, len(tagged))
+	}
+	scenariosSeen := make(map[string]bool)
+	for _, r := range tagged {
+		if r.Method == "" {
+			t.Error("tagged request has empty method")
+		}
+		if r.Scenario == "" {
+			t.Error("tagged request has empty scenario name")
+		}
+		scenariosSeen[r.Scenario] = true
+	}
+	// With n=100 and multiple scenarios, we should see at least 2 distinct scenarios.
+	if len(scenariosSeen) < 2 {
+		t.Errorf("expected at least 2 distinct scenarios, got %d: %v", len(scenariosSeen), scenariosSeen)
+	}
+}
+
+func TestGenerate_DefaultTraceDisabled(t *testing.T) {
+	bf := benchgen.Generate(sampleDataset(), nil)
+	names := make(map[string]bool)
+	for _, s := range bf.Scenarios {
+		names[s.Name] = true
+	}
+	if names["debug_trace_transaction"] || names["debug_trace_block"] {
+		t.Fatalf("expected trace scenarios to be disabled by default, got %v", names)
+	}
+}
+
+func TestGenerate_TraceOptions(t *testing.T) {
+	both := benchgen.GenerateWithOptions(sampleDataset(), nil, benchgen.Options{TraceTransaction: true, TraceBlock: true})
+	names := make(map[string]bool)
+	for _, s := range both.Scenarios {
+		names[s.Name] = true
+	}
+	if !names["debug_trace_transaction"] || !names["debug_trace_block"] {
+		t.Fatalf("expected both trace scenarios when enabled, got %v", names)
+	}
+}
+
+func TestGenerate_MixedBalanceUsesHistoricalBlocks(t *testing.T) {
+	bf := benchgen.Generate(sampleDataset(), rand.New(rand.NewSource(1)))
+	var balanceReqs, mixedReqs []benchgen.Request
+	for _, s := range bf.Scenarios {
+		switch s.Name {
+		case "balance":
+			balanceReqs = s.Requests
+		case "mixed_balance":
+			mixedReqs = s.Requests
+		}
+	}
+	if len(mixedReqs) == 0 {
+		t.Fatal("expected mixed_balance requests")
+	}
+	balanceSet := make(map[string]bool)
+	for _, r := range balanceReqs {
+		balanceSet[fmt.Sprint(r.Params)] = true
+		if got := r.Params[1]; got != "latest" {
+			t.Fatalf("expected balance scenario to use latest, got %v", got)
+		}
+	}
+	for _, r := range mixedReqs {
+		if r.Params[1] == "latest" {
+			t.Fatalf("expected mixed_balance to use historical block tags, got latest in %v", r.Params)
+		}
+		if balanceSet[fmt.Sprint(r.Params)] {
+			t.Fatalf("expected mixed_balance request %v to differ from balance scenario", r.Params)
+		}
+	}
+}
+
+func TestWeightedTaggedSampler(t *testing.T) {
+	bf := benchgen.GenerateWithOptions(sampleDataset(), nil, benchgen.Options{TraceTransaction: true})
+	s := bf.NewWeightedTaggedSampler(rand.New(rand.NewSource(99)))
+	seen := make(map[string]bool)
+	for i := 0; i < 50; i++ {
+		req := s.Next()
+		if req.Method == "" {
+			t.Fatal("expected sampled method")
+		}
+		if req.Scenario == "" {
+			t.Fatal("expected sampled scenario")
+		}
+		seen[req.Scenario] = true
+	}
+	if len(seen) < 2 {
+		t.Fatalf("expected sampler to visit multiple scenarios, got %v", seen)
+	}
+}
+
+func TestGenerate_GetLogsUsesBlockRangeAndAddressFilter(t *testing.T) {
+	bf := benchgen.Generate(sampleDataset(), nil)
+	var logs []benchgen.Request
+	for _, s := range bf.Scenarios {
+		if s.Name == "get_logs" {
+			logs = s.Requests
+			break
+		}
+	}
+	if len(logs) == 0 {
+		t.Fatal("expected get_logs scenario")
+	}
+	for _, req := range logs {
+		if req.Method != "eth_getLogs" {
+			t.Fatalf("expected eth_getLogs, got %s", req.Method)
+		}
+		if len(req.Params) != 1 {
+			t.Fatalf("expected single filter param, got %v", req.Params)
+		}
+		filter, ok := req.Params[0].(map[string]interface{})
+		if !ok {
+			t.Fatalf("expected filter object, got %#v", req.Params[0])
+		}
+		if filter["fromBlock"] != filter["toBlock"] {
+			t.Fatalf("expected single-block get_logs range, got %v", filter)
+		}
+		if _, ok := filter["address"]; !ok {
+			t.Fatalf("expected get_logs filter to include an address when tx.to is available, got %v", filter)
 		}
 	}
 }

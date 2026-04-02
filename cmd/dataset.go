@@ -12,86 +12,99 @@ import (
 
 var datasetCmd = &cobra.Command{
 	Use:   "dataset",
-	Short: "Collect on-chain data from Blockscout and save a test dataset",
-	Long: `Fetch top accounts, transactions, and blocks from a Blockscout REST API
-and write a standardised JSON dataset file for use with diff-test and benchgen.`,
+	Short: "Collect on-chain data by scanning a block range and save a test dataset",
+	Long: `Scan blocks from high to low over a given block range via an Ethereum
+JSON-RPC endpoint and write a standardised JSON dataset file containing blocks,
+transactions, and accounts for use with replay and benchgen.`,
 	RunE: runDataset,
 }
 
 var (
-	datasetBlockscout string
-	datasetRPC        string
-	datasetFromBlock  int64
-	datasetToBlock    int64
-	datasetAccounts   int
-	datasetTxs        int
-	datasetBlocks     int
-	datasetOut        string
-	datasetChain      string
-	datasetRateLimit  int
+	datasetRPC             string
+	datasetFromBlock       int64
+	datasetToBlock         int64
+	datasetAccounts        int
+	datasetTxs             int
+	datasetBlocks          int
+	datasetMaxTxPerAccount int
+	datasetOut             string
+	datasetChain           string
+	datasetConcurrency     int
 )
 
 func init() {
-	datasetCmd.Flags().StringVar(&datasetBlockscout, "blockscout", "", "Blockscout base URL (e.g. https://blockscout.example.com)")
-	datasetCmd.Flags().StringVar(&datasetRPC, "rpc", "", "RPC endpoint (reserved for future fallback use)")
-	datasetCmd.Flags().Int64Var(&datasetFromBlock, "from-block", 0, "Start block (inclusive, 0 = no lower bound)")
-	datasetCmd.Flags().Int64Var(&datasetToBlock, "to-block", 0, "End block (inclusive, 0 = no upper bound)")
+	datasetCmd.Flags().StringVar(&datasetRPC, "rpc", "", "Ethereum JSON-RPC endpoint URL (required)")
+	datasetCmd.Flags().Int64Var(&datasetFromBlock, "from-block", 0, "Start block, inclusive (0 = chain head minus --blocks range)")
+	datasetCmd.Flags().Int64Var(&datasetToBlock, "to-block", 0, "End block, inclusive (0 = latest)")
 	datasetCmd.Flags().IntVar(&datasetAccounts, "accounts", 1000, "Maximum number of accounts to collect")
 	datasetCmd.Flags().IntVar(&datasetTxs, "txs", 1000, "Maximum number of transactions to collect")
 	datasetCmd.Flags().IntVar(&datasetBlocks, "blocks", 1000, "Maximum number of blocks to collect")
+	datasetCmd.Flags().IntVar(&datasetMaxTxPerAccount, "max-tx-per-account", 100,
+		"Maximum transactions to store per account in the dataset (0 = unlimited)")
 	datasetCmd.Flags().StringVar(&datasetOut, "out", "dataset.json", "Output file path")
 	datasetCmd.Flags().StringVar(&datasetChain, "chain", "ethereum", "Chain name recorded in the dataset")
-	datasetCmd.Flags().IntVar(&datasetRateLimit, "rate-limit", 5, "Maximum Blockscout API requests per second")
+	datasetCmd.Flags().IntVar(&datasetConcurrency, "concurrency", 4, "Number of goroutines used to fetch blocks from the RPC endpoint")
 }
 
+// defaultFromBlockMultiplier is used when --from-block is not specified: we look
+// back this many times the requested block count to give enough room to find
+// blocks that contain transactions.
+const defaultFromBlockMultiplier = 10
+
 func runDataset(cmd *cobra.Command, args []string) error {
-	if datasetBlockscout == "" {
-		return fmt.Errorf("--blockscout URL is required")
+	if datasetRPC == "" {
+		return fmt.Errorf("--rpc URL is required")
 	}
 
 	ctx := context.Background()
-	client := dataset.NewBlockscoutClient(datasetBlockscout, datasetRateLimit)
+	scanner := dataset.NewChainScanner(datasetRPC)
+
+	// Resolve the upper bound of the scan range.
+	toBlock := datasetToBlock
+	if toBlock == 0 {
+		latest, err := scanner.LatestBlockNumber(ctx)
+		if err != nil {
+			return fmt.Errorf("get latest block: %w", err)
+		}
+		toBlock = latest
+		fmt.Fprintf(os.Stderr, "Latest block: %d\n", toBlock)
+	}
+
+	fromBlock := datasetFromBlock
+	if fromBlock == 0 {
+		// Default: scan backward from toBlock far enough to find data.
+		fromBlock = toBlock - int64(datasetBlocks)*defaultFromBlockMultiplier
+		if fromBlock < 0 {
+			fromBlock = 0
+		}
+	}
 
 	ds := &dataset.Dataset{
 		Meta: dataset.Meta{
 			Chain:       datasetChain,
-			Blockscout:  datasetBlockscout,
+			RPC:         datasetRPC,
 			GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 		},
 		Range: dataset.Range{
-			From: datasetFromBlock,
-			To:   datasetToBlock,
+			From: fromBlock,
+			To:   toBlock,
 		},
 	}
 
-	// Fetch accounts
-	fmt.Fprintf(os.Stderr, "Fetching top %d accounts...\n", datasetAccounts)
-	accounts, err := client.FetchAccounts(ctx, datasetAccounts)
+	fmt.Fprintf(os.Stderr, "Scanning blocks %d → %d (high to low) via %s\n", toBlock, fromBlock, datasetRPC)
+	fmt.Fprintf(os.Stderr, "  collecting up to %d accounts, %d transactions, %d blocks\n",
+		datasetAccounts, datasetTxs, datasetBlocks)
+
+	accounts, txs, blocks, err := scanner.Scan(ctx, fromBlock, toBlock, datasetAccounts, datasetTxs, datasetBlocks, datasetMaxTxPerAccount, datasetConcurrency)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: accounts fetch incomplete: %v\n", err)
+		fmt.Fprintf(os.Stderr, "warning: scan incomplete: %v\n", err)
 	}
 	ds.Accounts = accounts
-	fmt.Fprintf(os.Stderr, "  collected %d accounts\n", len(ds.Accounts))
-
-	// Fetch transactions
-	fmt.Fprintf(os.Stderr, "Fetching up to %d transactions (blocks %d–%d)...\n",
-		datasetTxs, datasetFromBlock, datasetToBlock)
-	txs, err := client.FetchTransactions(ctx, datasetFromBlock, datasetToBlock, datasetTxs)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: transactions fetch incomplete: %v\n", err)
-	}
 	ds.Transactions = txs
-	fmt.Fprintf(os.Stderr, "  collected %d transactions\n", len(ds.Transactions))
-
-	// Fetch blocks
-	fmt.Fprintf(os.Stderr, "Fetching up to %d blocks (range %d–%d)...\n",
-		datasetBlocks, datasetFromBlock, datasetToBlock)
-	blocks, err := client.FetchBlocks(ctx, datasetFromBlock, datasetToBlock, datasetBlocks)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: blocks fetch incomplete: %v\n", err)
-	}
 	ds.Blocks = blocks
-	fmt.Fprintf(os.Stderr, "  collected %d blocks\n", len(ds.Blocks))
+
+	fmt.Fprintf(os.Stderr, "  collected %d accounts, %d transactions, %d blocks\n",
+		len(ds.Accounts), len(ds.Transactions), len(ds.Blocks))
 
 	// Persist
 	if err := dataset.Save(datasetOut, ds); err != nil {

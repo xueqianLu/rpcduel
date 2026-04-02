@@ -13,6 +13,7 @@ import (
 // Result holds the outcome of a single RPC call.
 type Result struct {
 	Endpoint string
+	Tag      string // scenario or other caller-supplied label; empty if unused
 	Response *rpc.Response
 	Latency  time.Duration
 	Err      error
@@ -21,9 +22,13 @@ type Result struct {
 // Task is a single unit of work for the runner.
 type Task struct {
 	Endpoint string
+	Tag      string // scenario or other caller-supplied label; empty if unused
 	Method   string
 	Params   []interface{}
 }
+
+// TaskGenerator produces the next task for a worker during duration-based runs.
+type TaskGenerator func(workerID, iteration int) Task
 
 // Run executes tasks concurrently using a worker pool.
 // It sends results to the returned channel and closes it when done.
@@ -49,17 +54,19 @@ func Run(ctx context.Context, tasks []Task, concurrency int, timeout time.Durati
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			clients := make(map[string]*rpc.Client)
 			for task := range taskCh {
 				select {
 				case <-ctx.Done():
-					results <- Result{Endpoint: task.Endpoint, Err: ctx.Err()}
+					results <- Result{Endpoint: task.Endpoint, Tag: task.Tag, Err: ctx.Err()}
 					continue
 				default:
 				}
-				c := rpc.NewClient(task.Endpoint, timeout)
+				c := getClient(clients, task.Endpoint, timeout)
 				resp, lat, err := c.Call(ctx, task.Method, task.Params)
 				results <- Result{
 					Endpoint: task.Endpoint,
+					Tag:      task.Tag,
 					Response: resp,
 					Latency:  lat,
 					Err:      err,
@@ -133,6 +140,7 @@ func RunN(ctx context.Context, endpoints []string, method string, params []inter
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			clients := make(map[string]*rpc.Client)
 			for endpoint := range taskCh {
 				select {
 				case <-ctx.Done():
@@ -140,7 +148,7 @@ func RunN(ctx context.Context, endpoints []string, method string, params []inter
 					continue
 				default:
 				}
-				c := rpc.NewClient(endpoint, timeout)
+				c := getClient(clients, endpoint, timeout)
 				resp, lat, err := c.Call(ctx, method, params)
 				results <- Result{
 					Endpoint: endpoint,
@@ -308,6 +316,7 @@ func RunDurationFromTasks(ctx context.Context, tasks []Task, concurrency int,
 		startIdx := i % len(tasks)
 		go func(idx int) {
 			defer wg.Done()
+			clients := make(map[string]*rpc.Client)
 			deadline := time.Now().Add(duration)
 			for time.Now().Before(deadline) {
 				select {
@@ -316,10 +325,11 @@ func RunDurationFromTasks(ctx context.Context, tasks []Task, concurrency int,
 				default:
 				}
 				task := tasks[idx%len(tasks)]
-				c := rpc.NewClient(task.Endpoint, timeout)
+				c := getClient(clients, task.Endpoint, timeout)
 				resp, lat, err := c.Call(ctx, task.Method, task.Params)
 				results <- Result{
 					Endpoint: task.Endpoint,
+					Tag:      task.Tag,
 					Response: resp,
 					Latency:  lat,
 					Err:      err,
@@ -335,4 +345,59 @@ func RunDurationFromTasks(ctx context.Context, tasks []Task, concurrency int,
 	}()
 
 	return results
+}
+
+// RunDurationGenerated runs a pool of workers for the given duration and asks
+// the caller to generate each task on demand. This is useful when requests
+// should be sampled continuously rather than from a fixed pre-built pool.
+func RunDurationGenerated(ctx context.Context, concurrency int,
+	duration time.Duration, timeout time.Duration, gen TaskGenerator) <-chan Result {
+
+	results := make(chan Result, concurrency*2)
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+
+	var wg sync.WaitGroup
+	for workerID := 0; workerID < concurrency; workerID++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			clients := make(map[string]*rpc.Client)
+			deadline := time.Now().Add(duration)
+			for iter := 0; time.Now().Before(deadline); iter++ {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				task := gen(id, iter)
+				c := getClient(clients, task.Endpoint, timeout)
+				resp, lat, err := c.Call(ctx, task.Method, task.Params)
+				results <- Result{
+					Endpoint: task.Endpoint,
+					Tag:      task.Tag,
+					Response: resp,
+					Latency:  lat,
+					Err:      err,
+				}
+			}
+		}(workerID)
+	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	return results
+}
+
+func getClient(cache map[string]*rpc.Client, endpoint string, timeout time.Duration) *rpc.Client {
+	if c := cache[endpoint]; c != nil {
+		return c
+	}
+	c := rpc.NewClient(endpoint, timeout)
+	cache[endpoint] = c
+	return c
 }

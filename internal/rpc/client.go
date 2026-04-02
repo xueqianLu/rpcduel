@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -123,4 +124,34 @@ func ParseParams(raw string) ([]interface{}, error) {
 		return nil, fmt.Errorf("parse params: %w", err)
 	}
 	return params, nil
+}
+
+// ParsePositionalParams parses CLI positional args into JSON-RPC params.
+//
+// Each token is interpreted as JSON when possible (for example: true, false,
+// null, 123, {"k":1}, [1,2]). Tokens that are not valid standalone JSON,
+// such as latest, 0xa11111, addresses, and hashes, are kept as plain strings.
+func ParsePositionalParams(args []string) ([]interface{}, error) {
+	params := make([]interface{}, 0, len(args))
+	for _, arg := range args {
+		params = append(params, parsePositionalArg(arg))
+	}
+	return params, nil
+}
+
+func parsePositionalArg(raw string) interface{} {
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.UseNumber()
+
+	var v interface{}
+	if err := dec.Decode(&v); err != nil {
+		return raw
+	}
+
+	var extra interface{}
+	if err := dec.Decode(&extra); err != io.EOF {
+		return raw
+	}
+
+	return v
 }

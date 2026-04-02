@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"time"
 
@@ -76,32 +77,27 @@ func runBench(cmd *cobra.Command, args []string) error {
 		// Otherwise, run all requests from the file once (flat mode).
 		var requests []benchgen.Request
 		if benchDuration > 0 {
-			// Duration mode: build a large weighted pool and run it.
-			requests = bf.WeightedRequests(benchConcurrency*1000, nil)
-		} else if benchRequests > 0 {
-			requests = bf.WeightedRequests(benchRequests, nil)
-		} else {
-			requests = bf.FlattenRequests()
-		}
-
-		if len(requests) == 0 {
-			return fmt.Errorf("bench file contains no requests")
-		}
-
-		// Build runner.Task list, round-robining across endpoints.
-		tasks := make([]runner.Task, len(requests))
-		for i, req := range requests {
-			tasks[i] = runner.Task{
-				Endpoint: benchRPCs[i%len(benchRPCs)],
-				Method:   req.Method,
-				Params:   req.Params,
+			if len(bf.FlattenRequests()) == 0 {
+				return fmt.Errorf("bench file contains no requests")
 			}
-		}
-
-		if benchDuration > 0 {
-			// For duration mode with input file, cycle through tasks.
-			taskCh := runner.RunDurationFromTasks(ctx, tasks, benchConcurrency, benchDuration, benchTimeout)
-			for res := range taskCh {
+			workers := benchConcurrency
+			if workers <= 0 {
+				workers = 1
+			}
+			samplers := make([]*benchgen.WeightedSampler, workers)
+			for i := range samplers {
+				samplers[i] = bf.NewWeightedSampler(rand.New(rand.NewSource(42 + int64(i))))
+			}
+			resultCh := runner.RunDurationGenerated(ctx, workers, benchDuration, benchTimeout,
+				func(workerID, iteration int) runner.Task {
+					req := samplers[workerID].Next()
+					return runner.Task{
+						Endpoint: benchRPCs[(workerID+iteration)%len(benchRPCs)],
+						Method:   req.Method,
+						Params:   req.Params,
+					}
+				})
+			for res := range resultCh {
 				m := metricsMap[res.Endpoint]
 				if m == nil {
 					m = bench.NewMetrics(res.Endpoint)
@@ -109,7 +105,27 @@ func runBench(cmd *cobra.Command, args []string) error {
 				}
 				m.Record(res.Latency, res.Err != nil)
 			}
+			requests = nil
+		} else if benchRequests > 0 {
+			requests = bf.WeightedRequests(benchRequests, nil)
 		} else {
+			requests = bf.FlattenRequests()
+		}
+
+		if benchDuration == 0 && len(requests) == 0 {
+			return fmt.Errorf("bench file contains no requests")
+		}
+
+		if benchDuration == 0 {
+			// Build runner.Task list, round-robining across endpoints.
+			tasks := make([]runner.Task, len(requests))
+			for i, req := range requests {
+				tasks[i] = runner.Task{
+					Endpoint: benchRPCs[i%len(benchRPCs)],
+					Method:   req.Method,
+					Params:   req.Params,
+				}
+			}
 			resultCh := runner.Run(ctx, tasks, benchConcurrency, benchTimeout)
 			for res := range resultCh {
 				m := metricsMap[res.Endpoint]

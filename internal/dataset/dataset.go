@@ -6,19 +6,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 )
 
 // Meta holds metadata about a collected dataset.
 type Meta struct {
 	Chain       string `json:"chain"`
-	Blockscout  string `json:"blockscout"`
+	RPC         string `json:"rpc"`
 	GeneratedAt string `json:"generated_at"`
 }
 
-// Account is a chain account with its observed transaction count.
+// Account is a chain account with its observed transaction count and the
+// transactions it participated in during the scan range.
 type Account struct {
-	Address string `json:"address"`
-	TxCount int64  `json:"tx_count"`
+	Address      string        `json:"address"`
+	TxCount      int64         `json:"tx_count"`
+	Transactions []Transaction `json:"transactions,omitempty"`
 }
 
 // Transaction is a minimal on-chain transaction record.
@@ -51,7 +54,22 @@ type Dataset struct {
 }
 
 // Save serialises ds to the JSON file at path (pretty-printed).
+// Accounts are sorted by tx_count descending, blocks by number descending,
+// and transactions by block_number ascending.
 func Save(path string, ds *Dataset) error {
+	// Sort accounts by TxCount descending.
+	sort.Slice(ds.Accounts, func(i, j int) bool {
+		return ds.Accounts[i].TxCount > ds.Accounts[j].TxCount
+	})
+	// Sort blocks by Number descending (newest first).
+	sort.Slice(ds.Blocks, func(i, j int) bool {
+		return ds.Blocks[i].Number > ds.Blocks[j].Number
+	})
+	// Sort transactions by BlockNumber ascending (chronological order).
+	sort.Slice(ds.Transactions, func(i, j int) bool {
+		return ds.Transactions[i].BlockNumber < ds.Transactions[j].BlockNumber
+	})
+
 	data, err := json.MarshalIndent(ds, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal dataset: %w", err)

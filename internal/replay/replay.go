@@ -1,14 +1,17 @@
-// Package replay implements the diff-test logic: it loads a dataset, generates
+// Package replay implements the replay logic: it loads a dataset, generates
 // RPC calls per entity (account / transaction / block), runs them against two
 // endpoints concurrently, and categorises the differences.
 package replay
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xueqianLu/rpcduel/internal/dataset"
@@ -16,18 +19,22 @@ import (
 	"github.com/xueqianLu/rpcduel/internal/rpc"
 )
 
+// progressInterval is the number of completed tasks between progress log lines.
+// A final line is always emitted when all tasks have finished.
+const progressInterval = 100
+
 // DiffCategory classifies the kind of mismatch.
 type DiffCategory string
 
 const (
-	CategoryBalance DiffCategory = "balance_mismatch"
-	CategoryNonce   DiffCategory = "nonce_mismatch"
-	CategoryTx      DiffCategory = "tx_mismatch"
-	CategoryReceipt DiffCategory = "receipt_mismatch"
-	CategoryTrace   DiffCategory = "trace_mismatch"
-	CategoryMissing DiffCategory = "missing_data"
+	CategoryBalance  DiffCategory = "balance_mismatch"
+	CategoryNonce    DiffCategory = "nonce_mismatch"
+	CategoryTx       DiffCategory = "tx_mismatch"
+	CategoryReceipt  DiffCategory = "receipt_mismatch"
+	CategoryTrace    DiffCategory = "trace_mismatch"
+	CategoryMissing  DiffCategory = "missing_data"
 	CategoryRPCError DiffCategory = "rpc_error"
-	CategoryBlock   DiffCategory = "block_mismatch"
+	CategoryBlock    DiffCategory = "block_mismatch"
 )
 
 // archiveErrors is the set of substrings that indicate an archive/pruned node.
@@ -59,7 +66,7 @@ type FoundDiff struct {
 	Detail   string
 }
 
-// Result holds the aggregate outcome of a diff-test run.
+// Result holds the aggregate outcome of a replay run.
 type Result struct {
 	AccountsTested     int
 	TransactionsTested int
@@ -87,44 +94,98 @@ func (r *Result) Summary() map[DiffCategory]int {
 	return m
 }
 
-// Config holds the parameters for a diff-test run.
+// Config holds the parameters for a replay run.
 type Config struct {
-	EndpointA       string
-	EndpointB       string
-	MaxTxPerAccount int
-	DiffOpts        diff.Options
+	EndpointA        string
+	EndpointB        string
+	MaxTxPerAccount  int
+	DiffOpts         diff.Options
+	TraceTransaction bool
+	TraceBlock       bool
 }
 
-// Run executes the full diff-test suite against ds.
-func Run(ctx context.Context, ds *dataset.Dataset, epA, epB string, maxTxPerAccount int, opts diff.Options) (*Result, error) {
-	const requestTimeout = 30 * time.Second
-	cA := rpc.NewClient(epA, requestTimeout)
-	cB := rpc.NewClient(epB, requestTimeout)
-
-	result := &Result{}
-
-	// Build a lookup: address → list of block numbers from dataset transactions
-	addrBlocks := make(map[string][]int64)
-	for _, tx := range ds.Transactions {
-		addrBlocks[strings.ToLower(tx.From)] = append(addrBlocks[strings.ToLower(tx.From)], tx.BlockNumber)
+// Run executes the full replay suite against ds using concurrency goroutines.
+// If concurrency is <= 0 it defaults to 1.
+// progress, if non-nil, receives periodic one-line status updates written as
+// each batch of tasks completes (every progressInterval tasks and at the end).
+func Run(ctx context.Context, ds *dataset.Dataset, cfg Config, concurrency int, progress io.Writer) (*Result, error) {
+	if concurrency <= 0 {
+		concurrency = 1
 	}
 
-	// -----------------------------------------------------------------------
+	const requestTimeout = 30 * time.Second
+	cA := rpc.NewClient(cfg.EndpointA, requestTimeout)
+	cB := rpc.NewClient(cfg.EndpointB, requestTimeout)
+
+	result := &Result{
+		AccountsTested:     len(ds.Accounts),
+		TransactionsTested: len(ds.Transactions),
+		BlocksTested:       len(ds.Blocks),
+	}
+
+	// Build a lookup: address → list of block numbers from dataset transactions.
+	// Used as fallback when Account.Transactions is not populated (older datasets).
+	addrBlocks := make(map[string][]int64)
+	addrBlockSeen := make(map[string]map[int64]bool)
+	for _, tx := range ds.Transactions {
+		addr := strings.ToLower(tx.From)
+		if addrBlockSeen[addr] == nil {
+			addrBlockSeen[addr] = make(map[int64]bool)
+		}
+		if !addrBlockSeen[addr][tx.BlockNumber] {
+			addrBlockSeen[addr][tx.BlockNumber] = true
+			addrBlocks[addr] = append(addrBlocks[addr], tx.BlockNumber)
+		}
+	}
+
+	type rpcTask struct {
+		method string
+		params []interface{}
+		cat    DiffCategory
+	}
+
+	// Build the full ordered task list.
+	var tasks []rpcTask
+	seenTasks := make(map[string]bool)
+	addTask := func(method string, params []interface{}, cat DiffCategory) {
+		key, err := taskKey(method, params)
+		if err != nil {
+			// Should not happen for the small JSON-compatible param shapes used here.
+			// Fall back to a simple fmt-based key so we do not silently drop coverage.
+			key = fmt.Sprintf("%s|%v", method, params)
+		}
+		if seenTasks[key] {
+			return
+		}
+		seenTasks[key] = true
+		tasks = append(tasks, rpcTask{method: method, params: params, cat: cat})
+	}
+
 	// 1. Account dimension: eth_getBalance + eth_getTransactionCount
-	// -----------------------------------------------------------------------
 	for _, account := range ds.Accounts {
-		result.AccountsTested++
 		addr := account.Address
 
-		// Collect block numbers to query; fall back to "latest" if none.
-		blockNums := addrBlocks[strings.ToLower(addr)]
-		if maxTxPerAccount > 0 && len(blockNums) > maxTxPerAccount {
-			blockNums = blockNums[:maxTxPerAccount]
+		// Prefer per-account transactions stored in the dataset; fall back to
+		// deriving block numbers from the global transaction list.
+		var blockNums []int64
+		if len(account.Transactions) > 0 {
+			seen := make(map[int64]bool)
+			for _, tx := range account.Transactions {
+				if !seen[tx.BlockNumber] {
+					seen[tx.BlockNumber] = true
+					blockNums = append(blockNums, tx.BlockNumber)
+				}
+			}
+		} else {
+			blockNums = addrBlocks[strings.ToLower(addr)]
+		}
+
+		if cfg.MaxTxPerAccount > 0 && len(blockNums) > cfg.MaxTxPerAccount {
+			blockNums = blockNums[:cfg.MaxTxPerAccount]
 		}
 		if len(blockNums) == 0 {
 			blockNums = []int64{-1} // -1 sentinel → use "latest"
 		}
-
 		for _, bn := range blockNums {
 			var blockParam interface{}
 			if bn < 0 {
@@ -132,108 +193,143 @@ func Run(ctx context.Context, ds *dataset.Dataset, epA, epB string, maxTxPerAcco
 			} else {
 				blockParam = fmt.Sprintf("0x%x", bn)
 			}
-
-			// eth_getBalance
 			params := []interface{}{addr, blockParam}
-			if d := callAndDiff(ctx, cA, cB, "eth_getBalance", params, opts, CategoryBalance, result); d != nil {
-				result.Diffs = append(result.Diffs, *d)
-			}
-
-			// eth_getTransactionCount
-			if d := callAndDiff(ctx, cA, cB, "eth_getTransactionCount", params, opts, CategoryNonce, result); d != nil {
-				result.Diffs = append(result.Diffs, *d)
-			}
+			addTask("eth_getBalance", params, CategoryBalance)
+			addTask("eth_getTransactionCount", params, CategoryNonce)
 		}
 	}
 
-	// -----------------------------------------------------------------------
 	// 2. Transaction dimension: eth_getTransactionByHash + eth_getTransactionReceipt
-	// -----------------------------------------------------------------------
 	for _, tx := range ds.Transactions {
-		result.TransactionsTested++
 		params := []interface{}{tx.Hash}
-
-		if d := callAndDiff(ctx, cA, cB, "eth_getTransactionByHash", params, opts, CategoryTx, result); d != nil {
-			result.Diffs = append(result.Diffs, *d)
-		}
-		if d := callAndDiff(ctx, cA, cB, "eth_getTransactionReceipt", params, opts, CategoryReceipt, result); d != nil {
-			result.Diffs = append(result.Diffs, *d)
+		addTask("eth_getTransactionByHash", params, CategoryTx)
+		addTask("eth_getTransactionReceipt", params, CategoryReceipt)
+		if cfg.TraceTransaction {
+			addTask("debug_traceTransaction", []interface{}{tx.Hash, map[string]interface{}{}}, CategoryTrace)
 		}
 	}
 
-	// -----------------------------------------------------------------------
-	// 3. Block dimension: eth_getBlockByNumber
-	// -----------------------------------------------------------------------
+	// 3. Block dimension: eth_getBlockByNumber + debug_traceBlockByNumber
 	for _, block := range ds.Blocks {
-		result.BlocksTested++
-		params := []interface{}{fmt.Sprintf("0x%x", block.Number), false}
+		hexNumber := fmt.Sprintf("0x%x", block.Number)
+		addTask("eth_getBlockByNumber", []interface{}{hexNumber, false}, CategoryBlock)
+		if cfg.TraceBlock {
+			addTask("debug_traceBlockByNumber", []interface{}{hexNumber, map[string]interface{}{}}, CategoryTrace)
+		}
+	}
 
-		if d := callAndDiff(ctx, cA, cB, "eth_getBlockByNumber", params, opts, CategoryBlock, result); d != nil {
-			result.Diffs = append(result.Diffs, *d)
+	taskCh := make(chan rpcTask, len(tasks))
+	for _, t := range tasks {
+		taskCh <- t
+	}
+	close(taskCh)
+
+	outCh := make(chan callOutcome, concurrency)
+
+	var wg sync.WaitGroup
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for t := range taskCh {
+				outCh <- callAndDiff(ctx, cA, cB, t.method, t.params, cfg.DiffOpts, t.cat)
+			}
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(outCh)
+	}()
+
+	total := len(tasks)
+	done := 0
+	for out := range outCh {
+		done++
+		result.TotalRequests += out.totalReqs
+		result.SuccessRequests += out.successReqs
+		result.Unsupported += out.unsupported
+		if out.diff != nil {
+			result.Diffs = append(result.Diffs, *out.diff)
+		}
+		if progress != nil && total > 0 && (done == total || (done > 0 && done%progressInterval == 0)) {
+			pct := float64(done) / float64(total) * 100
+			fmt.Fprintf(progress, "Progress: %d/%d tasks (%.1f%%)\n", done, total, pct)
 		}
 	}
 
 	return result, nil
 }
 
-// callAndDiff sends the same call to both clients and returns a FoundDiff if
-// the responses differ. It returns nil when they match or both error identically.
-// result.TotalRequests and result.SuccessRequests are updated in-place.
-func callAndDiff(ctx context.Context, cA, cB *rpc.Client, method string, params []interface{}, opts diff.Options, cat DiffCategory, result *Result) *FoundDiff {
+// callOutcome carries the counters and optional diff produced by one RPC pair.
+type callOutcome struct {
+	totalReqs   int
+	successReqs int
+	unsupported int
+	diff        *FoundDiff
+}
+
+// callAndDiff sends the same call to both clients and returns a callOutcome
+// describing whether the responses match. Responses are compared only when
+// both endpoints succeed (non-archive-node error).
+func callAndDiff(ctx context.Context, cA, cB *rpc.Client, method string, params []interface{}, opts diff.Options, cat DiffCategory) callOutcome {
 	respA, _, errA := cA.Call(ctx, method, params)
 	respB, _, errB := cB.Call(ctx, method, params)
 
-	result.TotalRequests++
+	out := callOutcome{totalReqs: 1}
 
 	// Archive/pruned node detection: if either error looks like a missing-state
 	// error, mark as unsupported and do not count this as a diff.
 	if isArchiveError(errA) || isArchiveError(errB) {
-		result.Unsupported++
-		return nil
+		out.unsupported = 1
+		return out
 	}
 
 	if errA != nil && errB != nil {
 		// Both failed — not a diff.
-		return nil
+		return out
 	}
 
 	if errA != nil || errB != nil {
-		return &FoundDiff{
+		out.diff = &FoundDiff{
 			Category: CategoryRPCError,
 			Method:   method,
 			Params:   params,
 			Detail:   fmt.Sprintf("one endpoint errored: %v vs %v", errA, errB),
 		}
+		return out
 	}
 
 	// Both endpoints responded successfully.
-	result.SuccessRequests++
+	out.successReqs = 1
 
 	// Check for missing / null result on one side.
 	aIsNull := isNull(respA)
 	bIsNull := isNull(respB)
 	if aIsNull != bIsNull {
-		return &FoundDiff{
+		out.diff = &FoundDiff{
 			Category: CategoryMissing,
 			Method:   method,
 			Params:   params,
 			Detail:   fmt.Sprintf("one endpoint returned null: left=%v right=%v", aIsNull, bIsNull),
 		}
+		return out
 	}
 	if aIsNull && bIsNull {
-		return nil
+		return out
 	}
 
 	diffs, err := diff.Compare(respA.Result, respB.Result, opts)
 	if err != nil || len(diffs) == 0 {
-		return nil
+		return out
 	}
-	return &FoundDiff{
+	out.diff = &FoundDiff{
 		Category: cat,
 		Method:   method,
 		Params:   params,
 		Detail:   diffs[0].String(),
 	}
+	return out
 }
 
 // isNull reports whether a response has a JSON null result.
@@ -245,12 +341,87 @@ func isNull(resp *rpc.Response) bool {
 	return s == "" || s == "null"
 }
 
+func taskKey(method string, params []interface{}) (string, error) {
+	canonical, err := canonicalJSON(params)
+	if err != nil {
+		return "", err
+	}
+	return method + "|" + canonical, nil
+}
+
+func canonicalJSON(v interface{}) (string, error) {
+	b, err := marshalCanonical(v)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func marshalCanonical(v interface{}) ([]byte, error) {
+	switch x := v.(type) {
+	case map[string]interface{}:
+		keys := make([]string, 0, len(x))
+		for k := range x {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			keyJSON, err := json.Marshal(k)
+			if err != nil {
+				return nil, err
+			}
+			valJSON, err := marshalCanonical(x[k])
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, string(keyJSON)+":"+string(valJSON))
+		}
+		return []byte("{" + strings.Join(parts, ",") + "}"), nil
+	case []interface{}:
+		parts := make([]string, 0, len(x))
+		for _, item := range x {
+			itemJSON, err := marshalCanonical(item)
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, string(itemJSON))
+		}
+		return []byte("[" + strings.Join(parts, ",") + "]"), nil
+	default:
+		return json.Marshal(v)
+	}
+}
+
 // maxSampleDiffs is the maximum number of sample diffs included in reports.
 const maxSampleDiffs = 10
 
-// PrintResult writes a human-readable diff-test summary.
+// WriteResultCSV writes all discovered diffs to w as a CSV file.
+// The CSV has four columns: category, method, params, detail.
+// The first row is a header.  Returns the first encoding or flush error.
+func WriteResultCSV(w io.Writer, r *Result) error {
+	cw := csv.NewWriter(w)
+	if err := cw.Write([]string{"category", "method", "params", "detail"}); err != nil {
+		return err
+	}
+	for _, d := range r.Diffs {
+		params, _ := json.Marshal(d.Params)
+		if err := cw.Write([]string{
+			string(d.Category),
+			d.Method,
+			string(params),
+			d.Detail,
+		}); err != nil {
+			return err
+		}
+	}
+	cw.Flush()
+	return cw.Error()
+}
+
+// PrintResult writes a human-readable replay summary.
 func PrintResult(w io.Writer, r *Result) {
-	fmt.Fprintf(w, "\nDiff-Test Result\n")
+	fmt.Fprintf(w, "\nReplay Result\n")
 	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 40))
 	fmt.Fprintf(w, "Accounts tested:     %d\n", r.AccountsTested)
 	fmt.Fprintf(w, "Transactions tested: %d\n", r.TransactionsTested)

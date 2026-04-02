@@ -64,3 +64,42 @@ func TestMetrics_AvgLatency(t *testing.T) {
 		t.Errorf("expected avg 200ms, got %v", avg)
 	}
 }
+
+func TestMetrics_MinMax(t *testing.T) {
+	m := bench.NewMetrics("http://ep")
+	m.Record(50*time.Millisecond, false)
+	m.Record(200*time.Millisecond, false)
+	m.Record(100*time.Millisecond, false)
+	m.Finish()
+	s := m.Summarize()
+	if s.Min != 50*time.Millisecond {
+		t.Errorf("expected min 50ms, got %v", s.Min)
+	}
+	if s.Max != 200*time.Millisecond {
+		t.Errorf("expected max 200ms, got %v", s.Max)
+	}
+}
+
+func TestMetrics_Scenario(t *testing.T) {
+	m := bench.NewMetrics("http://ep")
+	m.Scenario = "balance"
+	m.Record(10*time.Millisecond, false)
+	m.Finish()
+	s := m.Summarize()
+	if s.Scenario != "balance" {
+		t.Errorf("expected scenario 'balance', got %q", s.Scenario)
+	}
+}
+
+func TestMetrics_ExplicitWindow(t *testing.T) {
+	start := time.Unix(100, 0)
+	end := start.Add(2 * time.Second)
+	m := bench.NewMetricsAt("http://ep", start)
+	m.Record(100*time.Millisecond, false)
+	m.Record(100*time.Millisecond, false)
+	m.FinishAt(end)
+	s := m.Summarize()
+	if s.QPS < 0.99 || s.QPS > 1.01 {
+		t.Fatalf("expected QPS ~1.0 over explicit 2s window, got %f", s.QPS)
+	}
+}
