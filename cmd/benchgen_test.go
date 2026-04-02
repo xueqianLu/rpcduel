@@ -17,6 +17,7 @@ func resetBenchgenGlobals() {
 	benchgenTimeout = 30 * time.Second
 	benchgenTraceTx = false
 	benchgenTraceBlock = false
+	benchgenOnly = nil
 	benchgenOut = ""
 	benchgenCSV = ""
 	benchgenOutput = "text"

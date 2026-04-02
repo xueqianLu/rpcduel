@@ -326,6 +326,7 @@ rpcduel replay [flags]
 | `--max-tx-per-account` | `100` | Max transactions tested per account (0 = unlimited) |
 | `--trace-transaction` | `false` | Also compare `debug_traceTransaction` for dataset transactions |
 | `--trace-block` | `false` | Also compare `debug_traceBlockByNumber` for dataset blocks |
+| `--only` | | Only run selected replay targets, e.g. `balance`, `transaction`, `block`, `trace` |
 | `--concurrency` | `4` | Number of goroutines used to execute RPC calls |
 | `--ignore-field` | | Field name(s) to skip in comparison |
 | `--timeout` | `30s` | Per-request timeout |
@@ -358,6 +359,13 @@ Progress: 1000/1000 tasks (100.0%)
 
 Trace RPCs are often much heavier than standard RPCs and may not be enabled on every node, so they are disabled by default.
 
+When `--only` is provided, replay only generates the selected directions. Supported values are:
+
+- fine-grained: `balance`, `transaction_count`, `transaction_by_hash`, `transaction_receipt`, `block_by_number`, `trace_transaction`, `trace_block`
+- aliases: `account`, `transaction`, `block`, `trace`
+
+`--only` cannot be combined with `--trace-transaction` or `--trace-block`; if you want trace-only replay, use `--only trace` or `--only trace_transaction`.
+
 **Example**
 
 ```bash
@@ -371,6 +379,15 @@ rpcduel replay \
   --output json \
   --report replay-report.json \
   --csv replay-report.csv
+```
+
+```bash
+# Only replay transaction-related checks
+rpcduel replay \
+  --dataset mainnet-dataset.json \
+  --rpc https://rpc-a.example.com \
+  --rpc https://rpc-b.example.com \
+  --only transaction
 ```
 
 ---
@@ -394,6 +411,7 @@ rpcduel benchgen [flags]
 | `--timeout` | `30s` | Per-request timeout |
 | `--trace-transaction` | `false` | Include the `debug_traceTransaction` scenario |
 | `--trace-block` | `false` | Include the `debug_traceBlockByNumber` scenario |
+| `--only` | | Only include selected scenario groups, e.g. `balance`, `transaction`, `block`, `logs`, `mixed_balance`, `trace` |
 | `--out` | | Write the generated bench scenario file to this path |
 | `--output` | `text` | `text` or `json` for the stdout summary |
 | `--csv` | | Write a detailed per-scenario CSV report to this file |
@@ -416,6 +434,13 @@ Requests are sampled from all enabled scenarios proportionally to their weights,
 
 Trace scenarios are disabled by default because they are often much heavier than standard RPCs and may not be supported by every node.
 
+When `--only` is provided, benchgen limits generation and execution to the selected scenario groups. Supported values include:
+
+- scenario names: `balance`, `transaction_count`, `transaction_by_hash`, `transaction_receipt`, `block_by_number`, `get_logs`, `mixed_balance`, `debug_trace_transaction`, `debug_trace_block`
+- aliases: `account`, `transaction`, `block`, `logs`, `trace`, `trace_transaction`, `trace_block`
+
+`--only` cannot be combined with `--trace-transaction` or `--trace-block`; use `--only trace` or `--only debug_trace_transaction` instead.
+
 **CSV report columns**
 
 `endpoint`, `scenario`, `total`, `errors`, `error_rate_pct`, `qps`, `avg_latency_ms`, `p50_latency_ms`, `p95_latency_ms`, `p99_latency_ms`, `min_latency_ms`, `max_latency_ms`
@@ -431,6 +456,14 @@ rpcduel benchgen \
   --requests 5000 \
   --trace-transaction \
   --csv bench-report.csv
+```
+
+```bash
+# Only benchmark logs + historical mixed balances
+rpcduel benchgen \
+  --dataset mainnet-dataset.json \
+  --rpc https://node-a.example.com \
+  --only logs,mixed_balance
 ```
 
 ```bash

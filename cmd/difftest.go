@@ -29,6 +29,7 @@ var (
 	diffTestMaxTxPerAccount  int
 	diffTestTraceTransaction bool
 	diffTestTraceBlock       bool
+	diffTestOnly             []string
 	diffTestOutput           string
 	diffTestIgnoreFields     []string
 	diffTestTimeout          time.Duration
@@ -46,6 +47,8 @@ func init() {
 		"Also compare debug_traceTransaction for dataset transactions")
 	diffTestCmd.Flags().BoolVar(&diffTestTraceBlock, "trace-block", false,
 		"Also compare debug_traceBlockByNumber for dataset blocks")
+	diffTestCmd.Flags().StringSliceVar(&diffTestOnly, "only", nil,
+		"Only run selected replay targets (e.g. balance,transaction,block,trace,trace_transaction,trace_block)")
 	diffTestCmd.Flags().StringVar(&diffTestOutput, "output", "text", "Output format: text or json")
 	diffTestCmd.Flags().StringArrayVar(&diffTestIgnoreFields, "ignore-field", nil,
 		"JSON field names to ignore in comparison")
@@ -58,6 +61,13 @@ func init() {
 func runDiffTest(cmd *cobra.Command, args []string) error {
 	if len(diffTestRPCs) != 2 {
 		return fmt.Errorf("exactly 2 --rpc endpoints are required")
+	}
+	if len(diffTestOnly) > 0 && (diffTestTraceTransaction || diffTestTraceBlock) {
+		return fmt.Errorf("--only cannot be combined with --trace-transaction or --trace-block")
+	}
+	only, err := parseReplayOnlyTargets(diffTestOnly)
+	if err != nil {
+		return err
 	}
 
 	ds, err := dataset.Load(diffTestDataset)
@@ -81,6 +91,7 @@ func runDiffTest(cmd *cobra.Command, args []string) error {
 		DiffOpts:         opts,
 		TraceTransaction: diffTestTraceTransaction,
 		TraceBlock:       diffTestTraceBlock,
+		Only:             only,
 	}, diffTestConcurrency, os.Stderr)
 	if err != nil {
 		return fmt.Errorf("replay: %w", err)

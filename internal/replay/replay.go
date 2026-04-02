@@ -102,6 +102,7 @@ type Config struct {
 	DiffOpts         diff.Options
 	TraceTransaction bool
 	TraceBlock       bool
+	Only             map[string]bool
 }
 
 // Run executes the full replay suite against ds using concurrency goroutines.
@@ -118,9 +119,21 @@ func Run(ctx context.Context, ds *dataset.Dataset, cfg Config, concurrency int, 
 	cB := rpc.NewClient(cfg.EndpointB, requestTimeout)
 
 	result := &Result{
-		AccountsTested:     len(ds.Accounts),
-		TransactionsTested: len(ds.Transactions),
-		BlocksTested:       len(ds.Blocks),
+		AccountsTested:     0,
+		TransactionsTested: 0,
+		BlocksTested:       0,
+	}
+	accountEnabled := cfg.enabled("balance") || cfg.enabled("transaction_count")
+	transactionEnabled := cfg.enabled("transaction_by_hash") || cfg.enabled("transaction_receipt") || cfg.enabled("trace_transaction")
+	blockEnabled := cfg.enabled("block_by_number") || cfg.enabled("trace_block")
+	if accountEnabled {
+		result.AccountsTested = len(ds.Accounts)
+	}
+	if transactionEnabled {
+		result.TransactionsTested = len(ds.Transactions)
+	}
+	if blockEnabled {
+		result.BlocksTested = len(ds.Blocks)
 	}
 
 	// Build a lookup: address → list of block numbers from dataset transactions.
@@ -194,17 +207,25 @@ func Run(ctx context.Context, ds *dataset.Dataset, cfg Config, concurrency int, 
 				blockParam = fmt.Sprintf("0x%x", bn)
 			}
 			params := []interface{}{addr, blockParam}
-			addTask("eth_getBalance", params, CategoryBalance)
-			addTask("eth_getTransactionCount", params, CategoryNonce)
+			if cfg.enabled("balance") {
+				addTask("eth_getBalance", params, CategoryBalance)
+			}
+			if cfg.enabled("transaction_count") {
+				addTask("eth_getTransactionCount", params, CategoryNonce)
+			}
 		}
 	}
 
 	// 2. Transaction dimension: eth_getTransactionByHash + eth_getTransactionReceipt
 	for _, tx := range ds.Transactions {
 		params := []interface{}{tx.Hash}
-		addTask("eth_getTransactionByHash", params, CategoryTx)
-		addTask("eth_getTransactionReceipt", params, CategoryReceipt)
-		if cfg.TraceTransaction {
+		if cfg.enabled("transaction_by_hash") {
+			addTask("eth_getTransactionByHash", params, CategoryTx)
+		}
+		if cfg.enabled("transaction_receipt") {
+			addTask("eth_getTransactionReceipt", params, CategoryReceipt)
+		}
+		if cfg.enabled("trace_transaction") {
 			addTask("debug_traceTransaction", []interface{}{tx.Hash, map[string]interface{}{}}, CategoryTrace)
 		}
 	}
@@ -212,8 +233,10 @@ func Run(ctx context.Context, ds *dataset.Dataset, cfg Config, concurrency int, 
 	// 3. Block dimension: eth_getBlockByNumber + debug_traceBlockByNumber
 	for _, block := range ds.Blocks {
 		hexNumber := fmt.Sprintf("0x%x", block.Number)
-		addTask("eth_getBlockByNumber", []interface{}{hexNumber, false}, CategoryBlock)
-		if cfg.TraceBlock {
+		if cfg.enabled("block_by_number") {
+			addTask("eth_getBlockByNumber", []interface{}{hexNumber, false}, CategoryBlock)
+		}
+		if cfg.enabled("trace_block") {
 			addTask("debug_traceBlockByNumber", []interface{}{hexNumber, map[string]interface{}{}}, CategoryTrace)
 		}
 	}
@@ -259,6 +282,20 @@ func Run(ctx context.Context, ds *dataset.Dataset, cfg Config, concurrency int, 
 	}
 
 	return result, nil
+}
+
+func (c Config) enabled(target string) bool {
+	if len(c.Only) > 0 {
+		return c.Only[target]
+	}
+	switch target {
+	case "trace_transaction":
+		return c.TraceTransaction
+	case "trace_block":
+		return c.TraceBlock
+	default:
+		return true
+	}
 }
 
 // callOutcome carries the counters and optional diff produced by one RPC pair.

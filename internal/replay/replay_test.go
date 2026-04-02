@@ -463,6 +463,53 @@ func TestRun_TraceToggles(t *testing.T) {
 	}
 }
 
+func TestRun_OnlyTransactionTargets(t *testing.T) {
+	srv := makeEchoServer(t, "0x1")
+	ds := &dataset.Dataset{
+		Accounts:     []dataset.Account{{Address: "0xabc", TxCount: 1}},
+		Transactions: []dataset.Transaction{{Hash: "0xtx1", BlockNumber: 10, From: "0xabc", To: "0xdef"}},
+		Blocks:       []dataset.Block{{Number: 10, TxCount: 1}},
+	}
+
+	cfg := testConfig(srv.URL, srv.URL, diff.DefaultOptions())
+	cfg.Only = map[string]bool{
+		"transaction_by_hash": true,
+		"transaction_receipt": true,
+	}
+	result, err := replay.Run(context.Background(), ds, cfg, 2, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.TotalRequests != 2 {
+		t.Fatalf("expected 2 transaction-only requests, got %d", result.TotalRequests)
+	}
+	if result.AccountsTested != 0 || result.BlocksTested != 0 || result.TransactionsTested != 1 {
+		t.Fatalf("unexpected tested counters: %+v", result)
+	}
+}
+
+func TestRun_OnlyTraceTransaction(t *testing.T) {
+	srv := makeEchoServer(t, map[string]interface{}{"ok": true})
+	ds := &dataset.Dataset{
+		Accounts:     []dataset.Account{{Address: "0xabc", TxCount: 1}},
+		Transactions: []dataset.Transaction{{Hash: "0xtx1", BlockNumber: 10, From: "0xabc", To: "0xdef"}},
+		Blocks:       []dataset.Block{{Number: 10, TxCount: 1}},
+	}
+
+	cfg := testConfig(srv.URL, srv.URL, diff.DefaultOptions())
+	cfg.Only = map[string]bool{"trace_transaction": true}
+	result, err := replay.Run(context.Background(), ds, cfg, 2, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.TotalRequests != 1 {
+		t.Fatalf("expected 1 trace-transaction request, got %d", result.TotalRequests)
+	}
+	if result.AccountsTested != 0 || result.BlocksTested != 0 || result.TransactionsTested != 1 {
+		t.Fatalf("unexpected tested counters: %+v", result)
+	}
+}
+
 func TestPrintResult_Text(t *testing.T) {
 	r := &replay.Result{
 		AccountsTested:     5,

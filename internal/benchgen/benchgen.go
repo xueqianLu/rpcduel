@@ -16,6 +16,7 @@ import (
 type Options struct {
 	TraceTransaction bool
 	TraceBlock       bool
+	Only             map[string]bool
 }
 
 // Request is a single JSON-RPC request in a scenario.
@@ -202,13 +203,15 @@ func GenerateWithOptions(ds *dataset.Dataset, rng *rand.Rand, opts Options) *Ben
 	// eth_getBalance
 	{
 		s := Scenario{Name: "balance", Weight: 0.20}
-		for _, a := range ds.Accounts {
-			s.Requests = append(s.Requests, Request{
-				Method: "eth_getBalance",
-				Params: []interface{}{a.Address, "latest"},
-			})
+		if opts.enabled("balance") {
+			for _, a := range ds.Accounts {
+				s.Requests = append(s.Requests, Request{
+					Method: "eth_getBalance",
+					Params: []interface{}{a.Address, "latest"},
+				})
+			}
 		}
-		if len(s.Requests) > 0 {
+		if opts.enabled("balance") && len(s.Requests) > 0 {
 			bf.Scenarios = append(bf.Scenarios, s)
 		}
 	}
@@ -216,13 +219,15 @@ func GenerateWithOptions(ds *dataset.Dataset, rng *rand.Rand, opts Options) *Ben
 	// eth_getTransactionCount
 	{
 		s := Scenario{Name: "transaction_count", Weight: 0.10}
-		for _, a := range ds.Accounts {
-			s.Requests = append(s.Requests, Request{
-				Method: "eth_getTransactionCount",
-				Params: []interface{}{a.Address, "latest"},
-			})
+		if opts.enabled("transaction_count") {
+			for _, a := range ds.Accounts {
+				s.Requests = append(s.Requests, Request{
+					Method: "eth_getTransactionCount",
+					Params: []interface{}{a.Address, "latest"},
+				})
+			}
 		}
-		if len(s.Requests) > 0 {
+		if opts.enabled("transaction_count") && len(s.Requests) > 0 {
 			bf.Scenarios = append(bf.Scenarios, s)
 		}
 	}
@@ -230,13 +235,15 @@ func GenerateWithOptions(ds *dataset.Dataset, rng *rand.Rand, opts Options) *Ben
 	// eth_getTransactionByHash
 	{
 		s := Scenario{Name: "transaction_by_hash", Weight: 0.15}
-		for _, tx := range ds.Transactions {
-			s.Requests = append(s.Requests, Request{
-				Method: "eth_getTransactionByHash",
-				Params: []interface{}{tx.Hash},
-			})
+		if opts.enabled("transaction_by_hash") {
+			for _, tx := range ds.Transactions {
+				s.Requests = append(s.Requests, Request{
+					Method: "eth_getTransactionByHash",
+					Params: []interface{}{tx.Hash},
+				})
+			}
 		}
-		if len(s.Requests) > 0 {
+		if opts.enabled("transaction_by_hash") && len(s.Requests) > 0 {
 			bf.Scenarios = append(bf.Scenarios, s)
 		}
 	}
@@ -244,13 +251,15 @@ func GenerateWithOptions(ds *dataset.Dataset, rng *rand.Rand, opts Options) *Ben
 	// eth_getTransactionReceipt
 	{
 		s := Scenario{Name: "transaction_receipt", Weight: 0.15}
-		for _, tx := range ds.Transactions {
-			s.Requests = append(s.Requests, Request{
-				Method: "eth_getTransactionReceipt",
-				Params: []interface{}{tx.Hash},
-			})
+		if opts.enabled("transaction_receipt") {
+			for _, tx := range ds.Transactions {
+				s.Requests = append(s.Requests, Request{
+					Method: "eth_getTransactionReceipt",
+					Params: []interface{}{tx.Hash},
+				})
+			}
 		}
-		if len(s.Requests) > 0 {
+		if opts.enabled("transaction_receipt") && len(s.Requests) > 0 {
 			bf.Scenarios = append(bf.Scenarios, s)
 		}
 	}
@@ -258,13 +267,15 @@ func GenerateWithOptions(ds *dataset.Dataset, rng *rand.Rand, opts Options) *Ben
 	// eth_getBlockByNumber
 	{
 		s := Scenario{Name: "block_by_number", Weight: 0.10}
-		for _, b := range ds.Blocks {
-			s.Requests = append(s.Requests, Request{
-				Method: "eth_getBlockByNumber",
-				Params: []interface{}{fmt.Sprintf("0x%x", b.Number), false},
-			})
+		if opts.enabled("block_by_number") {
+			for _, b := range ds.Blocks {
+				s.Requests = append(s.Requests, Request{
+					Method: "eth_getBlockByNumber",
+					Params: []interface{}{fmt.Sprintf("0x%x", b.Number), false},
+				})
+			}
 		}
-		if len(s.Requests) > 0 {
+		if opts.enabled("block_by_number") && len(s.Requests) > 0 {
 			bf.Scenarios = append(bf.Scenarios, s)
 		}
 	}
@@ -276,27 +287,29 @@ func GenerateWithOptions(ds *dataset.Dataset, rng *rand.Rand, opts Options) *Ben
 	// eth_getLogs – query each block's range individually
 	{
 		s := Scenario{Name: "get_logs", Weight: 0.10}
-		logAddresses := logAddressesByBlock(ds)
-		for _, b := range ds.Blocks {
-			hex := fmt.Sprintf("0x%x", b.Number)
-			filter := map[string]interface{}{
-				"fromBlock": hex,
-				"toBlock":   hex,
+		if opts.enabled("get_logs") {
+			logAddresses := logAddressesByBlock(ds)
+			for _, b := range ds.Blocks {
+				hex := fmt.Sprintf("0x%x", b.Number)
+				filter := map[string]interface{}{
+					"fromBlock": hex,
+					"toBlock":   hex,
+				}
+				if addr := logAddresses[b.Number]; addr != "" {
+					filter["address"] = addr
+				}
+				s.Requests = append(s.Requests, Request{
+					Method: "eth_getLogs",
+					Params: []interface{}{filter},
+				})
 			}
-			if addr := logAddresses[b.Number]; addr != "" {
-				filter["address"] = addr
-			}
-			s.Requests = append(s.Requests, Request{
-				Method: "eth_getLogs",
-				Params: []interface{}{filter},
-			})
 		}
-		if len(s.Requests) > 0 {
+		if opts.enabled("get_logs") && len(s.Requests) > 0 {
 			bf.Scenarios = append(bf.Scenarios, s)
 		}
 	}
 
-	if opts.TraceTransaction {
+	if opts.enabled("debug_trace_transaction") {
 		// debug_traceTransaction
 		{
 			s := Scenario{Name: "debug_trace_transaction", Weight: 0.10}
@@ -312,7 +325,7 @@ func GenerateWithOptions(ds *dataset.Dataset, rng *rand.Rand, opts Options) *Ben
 		}
 	}
 
-	if opts.TraceBlock {
+	if opts.enabled("debug_trace_block") {
 		// debug_traceBlockByNumber
 		{
 			s := Scenario{Name: "debug_trace_block", Weight: 0.05}
@@ -332,22 +345,24 @@ func GenerateWithOptions(ds *dataset.Dataset, rng *rand.Rand, opts Options) *Ben
 	// which avoids duplicating the plain latest-balance scenario.
 	{
 		s := Scenario{Name: "mixed_balance", Weight: 0.05}
-		accounts := make([]dataset.Account, len(ds.Accounts))
-		copy(accounts, ds.Accounts)
-		rng.Shuffle(len(accounts), func(i, j int) { accounts[i], accounts[j] = accounts[j], accounts[i] })
-		historical := historicalAccountBlocks(ds)
-		for _, a := range accounts {
-			blocks := historical[strings.ToLower(a.Address)]
-			if len(blocks) == 0 {
-				continue
+		if opts.enabled("mixed_balance") {
+			accounts := make([]dataset.Account, len(ds.Accounts))
+			copy(accounts, ds.Accounts)
+			rng.Shuffle(len(accounts), func(i, j int) { accounts[i], accounts[j] = accounts[j], accounts[i] })
+			historical := historicalAccountBlocks(ds)
+			for _, a := range accounts {
+				blocks := historical[strings.ToLower(a.Address)]
+				if len(blocks) == 0 {
+					continue
+				}
+				blockParam := fmt.Sprintf("0x%x", blocks[rng.Intn(len(blocks))])
+				s.Requests = append(s.Requests, Request{
+					Method: "eth_getBalance",
+					Params: []interface{}{a.Address, blockParam},
+				})
 			}
-			blockParam := fmt.Sprintf("0x%x", blocks[rng.Intn(len(blocks))])
-			s.Requests = append(s.Requests, Request{
-				Method: "eth_getBalance",
-				Params: []interface{}{a.Address, blockParam},
-			})
 		}
-		if len(s.Requests) > 0 {
+		if opts.enabled("mixed_balance") && len(s.Requests) > 0 {
 			bf.Scenarios = append(bf.Scenarios, s)
 		}
 	}
@@ -427,4 +442,18 @@ func logAddressesByBlock(ds *dataset.Dataset) map[int64]string {
 		}
 	}
 	return out
+}
+
+func (o Options) enabled(target string) bool {
+	if len(o.Only) > 0 {
+		return o.Only[target]
+	}
+	switch target {
+	case "debug_trace_transaction":
+		return o.TraceTransaction
+	case "debug_trace_block":
+		return o.TraceBlock
+	default:
+		return true
+	}
 }

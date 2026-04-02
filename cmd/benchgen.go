@@ -44,6 +44,7 @@ var (
 	benchgenTimeout     time.Duration
 	benchgenTraceTx     bool
 	benchgenTraceBlock  bool
+	benchgenOnly        []string
 	benchgenOut         string
 	benchgenCSV         string
 	benchgenOutput      string
@@ -58,6 +59,8 @@ func init() {
 	benchgenCmd.Flags().DurationVar(&benchgenTimeout, "timeout", 30*time.Second, "Per-request timeout")
 	benchgenCmd.Flags().BoolVar(&benchgenTraceTx, "trace-transaction", false, "Include debug_traceTransaction scenarios")
 	benchgenCmd.Flags().BoolVar(&benchgenTraceBlock, "trace-block", false, "Include debug_traceBlockByNumber scenarios")
+	benchgenCmd.Flags().StringSliceVar(&benchgenOnly, "only", nil,
+		"Only include selected scenario groups (e.g. balance,transaction,block,logs,mixed_balance,trace)")
 	benchgenCmd.Flags().StringVar(&benchgenOut, "out", "", "Write the generated bench scenario file to this path")
 	benchgenCmd.Flags().StringVar(&benchgenCSV, "csv", "", "Write detailed per-scenario CSV report to this file")
 	benchgenCmd.Flags().StringVar(&benchgenOutput, "output", "text", "Output format: text or json")
@@ -66,6 +69,13 @@ func init() {
 func runBenchgen(_ *cobra.Command, _ []string) error {
 	if len(benchgenRPCs) == 0 && benchgenOut == "" {
 		return fmt.Errorf("at least one --rpc endpoint or --out is required")
+	}
+	if len(benchgenOnly) > 0 && (benchgenTraceTx || benchgenTraceBlock) {
+		return fmt.Errorf("--only cannot be combined with --trace-transaction or --trace-block")
+	}
+	only, err := parseBenchgenOnlyTargets(benchgenOnly)
+	if err != nil {
+		return err
 	}
 
 	ds, err := dataset.Load(benchgenDataset)
@@ -76,6 +86,7 @@ func runBenchgen(_ *cobra.Command, _ []string) error {
 	bf := benchgen.GenerateWithOptions(ds, nil, benchgen.Options{
 		TraceTransaction: benchgenTraceTx,
 		TraceBlock:       benchgenTraceBlock,
+		Only:             only,
 	})
 
 	if benchgenOut != "" {

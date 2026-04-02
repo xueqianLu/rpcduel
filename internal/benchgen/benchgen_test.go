@@ -222,6 +222,34 @@ func TestWeightedTaggedSampler(t *testing.T) {
 	}
 }
 
+func TestGenerate_OnlySelectedScenarios(t *testing.T) {
+	bf := benchgen.GenerateWithOptions(sampleDataset(), nil, benchgen.Options{
+		Only: map[string]bool{
+			"balance":                 true,
+			"debug_trace_transaction": true,
+		},
+	})
+	if len(bf.Scenarios) != 2 {
+		t.Fatalf("expected exactly 2 scenarios, got %d", len(bf.Scenarios))
+	}
+	names := make(map[string]bool)
+	for _, s := range bf.Scenarios {
+		names[s.Name] = true
+	}
+	if !names["balance"] || !names["debug_trace_transaction"] {
+		t.Fatalf("expected only selected scenarios, got %v", names)
+	}
+}
+
+func TestGenerate_OnlyTraceDoesNotRequireTraceFlags(t *testing.T) {
+	bf := benchgen.GenerateWithOptions(sampleDataset(), nil, benchgen.Options{
+		Only: map[string]bool{"debug_trace_block": true},
+	})
+	if len(bf.Scenarios) != 1 || bf.Scenarios[0].Name != "debug_trace_block" {
+		t.Fatalf("expected only debug_trace_block scenario, got %+v", bf.Scenarios)
+	}
+}
+
 func TestGenerate_GetLogsUsesBlockRangeAndAddressFilter(t *testing.T) {
 	bf := benchgen.Generate(sampleDataset(), nil)
 	var logs []benchgen.Request
