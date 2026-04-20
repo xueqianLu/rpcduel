@@ -35,7 +35,7 @@ It collects real on-chain data, runs response-consistency tests across multiple 
 
 | Capability | Description |
 |---|---|
-| **Direct RPC calls** | Invoke any Ethereum JSON-RPC method from the CLI without hand-writing `curl` commands; HTTP(S) and WebSocket (`ws://`, `wss://`) endpoints are both supported transparently |
+| **Direct RPC calls** | Invoke any Ethereum JSON-RPC method from the CLI without hand-writing `curl` commands; HTTP(S), WebSocket (`ws://`, `wss://`), and Unix IPC (`unix://`) endpoints are all supported transparently |
 | **Response diffing** | Deep JSON comparison with hex/decimal normalisation, field ignoring, and order-insensitive array comparison |
 | **Benchmarking** | Concurrent load generation with QPS, HDR-histogram-backed P50/P95/P99/P999 latencies and error-rate reporting; `--rps` token-bucket rate limiting and `--warmup` settling phase |
 | **Duel mode** | Run diff and bench simultaneously against two endpoints |

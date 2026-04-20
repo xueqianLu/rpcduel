@@ -69,11 +69,13 @@ type Options struct {
 }
 
 // Client is an Ethereum JSON-RPC client. The transport is selected from the
-// endpoint URL scheme: http(s) → HTTP transport, ws(s) → WebSocket.
+// endpoint URL scheme: http(s) → HTTP transport, ws(s) → WebSocket,
+// unix:// → Unix-domain-socket IPC (geth.ipc style).
 type Client struct {
 	endpoint string
 	http     *http.Client
 	ws       *wsConn
+	ipc      *ipcConn
 	opts     Options
 }
 
@@ -97,6 +99,10 @@ func NewClientWithOptions(endpoint string, opts Options) *Client {
 	c := &Client{endpoint: endpoint, opts: opts}
 	if IsWebSocketEndpoint(endpoint) {
 		c.ws = newWSConn(endpoint, opts)
+		return c
+	}
+	if IsIPCEndpoint(endpoint) {
+		c.ipc = newIPCConn(endpoint, opts)
 		return c
 	}
 	var rt http.RoundTripper = opts.Transport
@@ -156,6 +162,10 @@ func (c *Client) Call(ctx context.Context, method string, params []interface{}) 
 			callCtx, cancel := context.WithTimeout(ctx, c.opts.Timeout)
 			resp, lastErr = c.ws.call(callCtx, body, id)
 			cancel()
+		} else if c.ipc != nil {
+			callCtx, cancel := context.WithTimeout(ctx, c.opts.Timeout)
+			resp, lastErr = c.ipc.call(callCtx, body, id)
+			cancel()
 		} else {
 			resp, lastErr = c.doOnce(ctx, body)
 		}
@@ -170,6 +180,9 @@ func (c *Client) Call(ctx context.Context, method string, params []interface{}) 
 func (c *Client) Close() {
 	if c.ws != nil {
 		c.ws.Close()
+	}
+	if c.ipc != nil {
+		c.ipc.Close()
 	}
 }
 

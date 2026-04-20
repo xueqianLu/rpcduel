@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Unix-domain-socket IPC transport. Endpoints with the `unix://` URL
+  scheme (e.g. `unix:///tmp/geth.ipc`) connect directly to a node's IPC
+  socket using the same multiplexed connection pattern as the WebSocket
+  transport (single dial, id-keyed pending map, lazy reconnect).
 - WebSocket transport for JSON-RPC endpoints. Any endpoint URL with a
   `ws://` or `wss://` scheme transparently uses a single multiplexed
   WebSocket connection (concurrent requests, response demultiplexed by
