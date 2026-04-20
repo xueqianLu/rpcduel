@@ -2,22 +2,34 @@
 package bench
 
 import (
-	"math"
-	"sort"
+	"io"
 	"time"
+
+	hdrhistogram "github.com/HdrHistogram/hdrhistogram-go"
+)
+
+// Histogram bounds: 1µs .. 1 minute, 3 significant figures (~0.1% precision).
+const (
+	hdrMinValue       = 1
+	hdrMaxValue       = int64(60 * time.Second / time.Microsecond) // 60s in µs
+	hdrSignificantFig = 3
 )
 
 // Metrics collects latency and error statistics.
+//
+// Latencies are stored in an HDR histogram for O(1) memory and accurate
+// high-percentile reporting (P999) without sorting full latency slices.
 type Metrics struct {
 	Endpoint  string
 	Scenario  string // optional scenario label (set by caller)
 	Total     int
 	Errors    int
-	Latencies []time.Duration
-	min       time.Duration
-	max       time.Duration
 	StartTime time.Time
 	EndTime   time.Time
+
+	hist *hdrhistogram.Histogram
+	min  time.Duration
+	max  time.Duration
 }
 
 // NewMetrics creates a new Metrics for the given endpoint.
@@ -30,16 +42,24 @@ func NewMetricsAt(endpoint string, start time.Time) *Metrics {
 	return &Metrics{
 		Endpoint:  endpoint,
 		StartTime: start,
+		hist:      hdrhistogram.New(hdrMinValue, hdrMaxValue, hdrSignificantFig),
 	}
 }
 
 // Record adds a single request result.
 func (m *Metrics) Record(latency time.Duration, isError bool) {
 	m.Total++
-	m.Latencies = append(m.Latencies, latency)
 	if isError {
 		m.Errors++
 	}
+	v := int64(latency / time.Microsecond)
+	if v < hdrMinValue {
+		v = hdrMinValue
+	}
+	if v > hdrMaxValue {
+		v = hdrMaxValue
+	}
+	_ = m.hist.RecordValue(v)
 	if m.Total == 1 || latency < m.min {
 		m.min = latency
 	}
@@ -82,33 +102,32 @@ func (m *Metrics) ErrorRate() float64 {
 
 // AvgLatency returns the mean latency.
 func (m *Metrics) AvgLatency() time.Duration {
-	if len(m.Latencies) == 0 {
+	if m.hist == nil || m.hist.TotalCount() == 0 {
 		return 0
 	}
-	var sum time.Duration
-	for _, l := range m.Latencies {
-		sum += l
-	}
-	return sum / time.Duration(len(m.Latencies))
+	return time.Duration(m.hist.Mean()) * time.Microsecond
 }
 
 // Percentile returns the p-th percentile latency (e.g., 95 for P95).
 func (m *Metrics) Percentile(p float64) time.Duration {
-	if len(m.Latencies) == 0 {
+	if m.hist == nil || m.hist.TotalCount() == 0 {
 		return 0
 	}
-	sorted := make([]time.Duration, len(m.Latencies))
-	copy(sorted, m.Latencies)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
-	idx := int(math.Ceil(p/100.0*float64(len(sorted)))) - 1
-	if idx < 0 {
-		idx = 0
-	}
-	if idx >= len(sorted) {
-		idx = len(sorted) - 1
-	}
-	return sorted[idx]
+	return time.Duration(m.hist.ValueAtQuantile(p)) * time.Microsecond
 }
+
+// WriteHDR writes the percentile distribution log (HDR Histogram text
+// format) to w. Useful for hdrhistogram-go / wrk2 tooling.
+func (m *Metrics) WriteHDR(w io.Writer) error {
+	if m.hist == nil {
+		return nil
+	}
+	_, err := m.hist.PercentilesPrint(w, 5, 1.0)
+	return err
+}
+
+// Histogram returns the underlying HDR histogram (mainly for tests).
+func (m *Metrics) Histogram() *hdrhistogram.Histogram { return m.hist }
 
 // Summary is a snapshot of computed metrics.
 type Summary struct {
@@ -122,6 +141,7 @@ type Summary struct {
 	P50        time.Duration
 	P95        time.Duration
 	P99        time.Duration
+	P999       time.Duration
 	Min        time.Duration
 	Max        time.Duration
 }
@@ -140,6 +160,7 @@ func (m *Metrics) Summarize() Summary {
 		P50:        m.Percentile(50),
 		P95:        m.Percentile(95),
 		P99:        m.Percentile(99),
+		P999:       m.Percentile(99.9),
 		Min:        m.min,
 		Max:        m.max,
 	}

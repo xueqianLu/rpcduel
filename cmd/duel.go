@@ -35,6 +35,7 @@ var (
 	duelOutput       string
 	duelIgnoreFields []string
 	duelIgnoreOrder  bool
+	duelWarmup       time.Duration
 )
 
 func init() {
@@ -48,6 +49,7 @@ func init() {
 	duelCmd.Flags().StringVar(&duelOutput, "output", "text", "Output format: text or json")
 	duelCmd.Flags().StringArrayVar(&duelIgnoreFields, "ignore-field", nil, "JSON field names to ignore in comparison")
 	duelCmd.Flags().BoolVar(&duelIgnoreOrder, "ignore-order", false, "Treat arrays as unordered sets")
+	duelCmd.Flags().DurationVar(&duelWarmup, "warmup", 0, "Discard results from the first N (e.g. 5s) of the run, before measurement begins")
 }
 
 func runDuel(cmd *cobra.Command, args []string) error {
@@ -72,11 +74,17 @@ func runDuel(cmd *cobra.Command, args []string) error {
 	}
 	opts.IgnoreOrder = duelIgnoreOrder
 
-	ctx := context.Background()
+	ctx := runnerContext(context.Background())
 	outFmt := report.Format(duelOutput)
 
-	metricsA := bench.NewMetrics(epA)
-	metricsB := bench.NewMetrics(epB)
+	startTime := time.Now()
+	warmupEnd := startTime.Add(duelWarmup)
+	if duelWarmup > 0 {
+		slog.Info("warmup phase started", "duration", duelWarmup)
+	}
+
+	metricsA := bench.NewMetricsAt(epA, warmupEnd)
+	metricsB := bench.NewMetricsAt(epB, warmupEnd)
 	var allDiffs []diff.Difference
 	total := 0
 
@@ -94,6 +102,15 @@ func runDuel(cmd *cobra.Command, args []string) error {
 	}
 
 	for pair := range pairCh {
+		// Use the later of the two timestamps so warmup-window pairs are
+		// fully discarded even if one leg returned early.
+		pairTs := pair.Left.Timestamp
+		if pair.Right.Timestamp.After(pairTs) {
+			pairTs = pair.Right.Timestamp
+		}
+		if duelWarmup > 0 && pairTs.Before(warmupEnd) {
+			continue
+		}
 		total++
 		metricsA.Record(pair.Left.Latency, pair.Left.Err != nil)
 		metricsB.Record(pair.Right.Latency, pair.Right.Err != nil)

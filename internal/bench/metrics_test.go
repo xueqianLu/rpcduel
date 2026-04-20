@@ -60,8 +60,10 @@ func TestMetrics_AvgLatency(t *testing.T) {
 	m.Record(300*time.Millisecond, false)
 	m.Finish()
 	avg := m.AvgLatency()
-	if avg != 200*time.Millisecond {
-		t.Errorf("expected avg 200ms, got %v", avg)
+	// HDR Histogram is precise to ~0.1% (3 significant figures); allow a
+	// 1ms tolerance around the expected 200ms mean.
+	if avg < 199*time.Millisecond || avg > 201*time.Millisecond {
+		t.Errorf("expected avg ~200ms, got %v", avg)
 	}
 }
 

@@ -12,11 +12,12 @@ import (
 
 // Result holds the outcome of a single RPC call.
 type Result struct {
-	Endpoint string
-	Tag      string // scenario or other caller-supplied label; empty if unused
-	Response *rpc.Response
-	Latency  time.Duration
-	Err      error
+	Endpoint  string
+	Tag       string // scenario or other caller-supplied label; empty if unused
+	Response  *rpc.Response
+	Latency   time.Duration
+	Err       error
+	Timestamp time.Time // wall-clock time when the call completed
 }
 
 // Task is a single unit of work for the runner.
@@ -62,15 +63,8 @@ func Run(ctx context.Context, tasks []Task, concurrency int, timeout time.Durati
 					continue
 				default:
 				}
-				c := getClient(clients, task.Endpoint, timeout)
-				resp, lat, err := c.Call(ctx, task.Method, task.Params)
-				results <- Result{
-					Endpoint: task.Endpoint,
-					Tag:      task.Tag,
-					Response: resp,
-					Latency:  lat,
-					Err:      err,
-				}
+				c := getClientCtx(ctx, clients, task.Endpoint, timeout)
+				results <- callOnce(ctx, c, task.Endpoint, task.Tag, task.Method, task.Params)
 			}
 		}()
 	}
@@ -96,7 +90,8 @@ func RunDuration(ctx context.Context, endpoints []string, method string, params 
 		ep := endpoints[i%len(endpoints)]
 		go func(endpoint string) {
 			defer wg.Done()
-			c := rpc.NewClient(endpoint, timeout)
+			clients := make(map[string]*rpc.Client)
+			c := getClientCtx(ctx, clients, endpoint, timeout)
 			deadline := time.Now().Add(duration)
 			for time.Now().Before(deadline) {
 				select {
@@ -104,13 +99,7 @@ func RunDuration(ctx context.Context, endpoints []string, method string, params 
 					return
 				default:
 				}
-				resp, lat, err := c.Call(ctx, method, params)
-				results <- Result{
-					Endpoint: endpoint,
-					Response: resp,
-					Latency:  lat,
-					Err:      err,
-				}
+				results <- callOnce(ctx, c, endpoint, "", method, params)
 			}
 		}(ep)
 	}
@@ -148,14 +137,8 @@ func RunN(ctx context.Context, endpoints []string, method string, params []inter
 					continue
 				default:
 				}
-				c := getClient(clients, endpoint, timeout)
-				resp, lat, err := c.Call(ctx, method, params)
-				results <- Result{
-					Endpoint: endpoint,
-					Response: resp,
-					Latency:  lat,
-					Err:      err,
-				}
+				c := getClientCtx(ctx, clients, endpoint, timeout)
+				results <- callOnce(ctx, c, endpoint, "", method, params)
 			}
 		}()
 	}
@@ -196,8 +179,9 @@ func RunPaired(ctx context.Context, endpointA, endpointB string, method string, 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			cA := rpc.NewClient(endpointA, timeout)
-			cB := rpc.NewClient(endpointB, timeout)
+			cClients := make(map[string]*rpc.Client)
+			cA := getClientCtx(ctx, cClients, endpointA, timeout)
+			cB := getClientCtx(ctx, cClients, endpointB, timeout)
 			for range taskCh {
 				select {
 				case <-ctx.Done():
@@ -209,6 +193,14 @@ func RunPaired(ctx context.Context, endpointA, endpointB string, method string, 
 				default:
 				}
 
+				if err := waitRate(ctx); err != nil {
+					pairs <- PairResult{
+						Left:  Result{Endpoint: endpointA, Err: err, Timestamp: time.Now()},
+						Right: Result{Endpoint: endpointB, Err: err, Timestamp: time.Now()},
+					}
+					continue
+				}
+
 				var (
 					lResult, rResult Result
 					innerWg          sync.WaitGroup
@@ -217,12 +209,12 @@ func RunPaired(ctx context.Context, endpointA, endpointB string, method string, 
 				go func() {
 					defer innerWg.Done()
 					resp, lat, err := cA.Call(ctx, method, params)
-					lResult = Result{Endpoint: endpointA, Response: resp, Latency: lat, Err: err}
+					lResult = Result{Endpoint: endpointA, Response: resp, Latency: lat, Err: err, Timestamp: time.Now()}
 				}()
 				go func() {
 					defer innerWg.Done()
 					resp, lat, err := cB.Call(ctx, method, params)
-					rResult = Result{Endpoint: endpointB, Response: resp, Latency: lat, Err: err}
+					rResult = Result{Endpoint: endpointB, Response: resp, Latency: lat, Err: err, Timestamp: time.Now()}
 				}()
 				innerWg.Wait()
 				pairs <- PairResult{Left: lResult, Right: rResult}
@@ -249,14 +241,18 @@ func PairResultFromDuration(ctx context.Context, endpointA, endpointB string, me
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			cA := rpc.NewClient(endpointA, timeout)
-			cB := rpc.NewClient(endpointB, timeout)
+			cClients := make(map[string]*rpc.Client)
+			cA := getClientCtx(ctx, cClients, endpointA, timeout)
+			cB := getClientCtx(ctx, cClients, endpointB, timeout)
 			deadline := time.Now().Add(duration)
 			for time.Now().Before(deadline) {
 				select {
 				case <-ctx.Done():
 					return
 				default:
+				}
+				if err := waitRate(ctx); err != nil {
+					return
 				}
 				var (
 					lResult, rResult Result
@@ -266,12 +262,12 @@ func PairResultFromDuration(ctx context.Context, endpointA, endpointB string, me
 				go func() {
 					defer innerWg.Done()
 					resp, lat, err := cA.Call(ctx, method, params)
-					lResult = Result{Endpoint: endpointA, Response: resp, Latency: lat, Err: err}
+					lResult = Result{Endpoint: endpointA, Response: resp, Latency: lat, Err: err, Timestamp: time.Now()}
 				}()
 				go func() {
 					defer innerWg.Done()
 					resp, lat, err := cB.Call(ctx, method, params)
-					rResult = Result{Endpoint: endpointB, Response: resp, Latency: lat, Err: err}
+					rResult = Result{Endpoint: endpointB, Response: resp, Latency: lat, Err: err, Timestamp: time.Now()}
 				}()
 				innerWg.Wait()
 
@@ -325,15 +321,8 @@ func RunDurationFromTasks(ctx context.Context, tasks []Task, concurrency int,
 				default:
 				}
 				task := tasks[idx%len(tasks)]
-				c := getClient(clients, task.Endpoint, timeout)
-				resp, lat, err := c.Call(ctx, task.Method, task.Params)
-				results <- Result{
-					Endpoint: task.Endpoint,
-					Tag:      task.Tag,
-					Response: resp,
-					Latency:  lat,
-					Err:      err,
-				}
+				c := getClientCtx(ctx, clients, task.Endpoint, timeout)
+				results <- callOnce(ctx, c, task.Endpoint, task.Tag, task.Method, task.Params)
 				idx++
 			}
 		}(startIdx)
@@ -372,15 +361,8 @@ func RunDurationGenerated(ctx context.Context, concurrency int,
 				default:
 				}
 				task := gen(id, iter)
-				c := getClient(clients, task.Endpoint, timeout)
-				resp, lat, err := c.Call(ctx, task.Method, task.Params)
-				results <- Result{
-					Endpoint: task.Endpoint,
-					Tag:      task.Tag,
-					Response: resp,
-					Latency:  lat,
-					Err:      err,
-				}
+				c := getClientCtx(ctx, clients, task.Endpoint, timeout)
+				results <- callOnce(ctx, c, task.Endpoint, task.Tag, task.Method, task.Params)
 			}
 		}(workerID)
 	}
@@ -393,11 +375,31 @@ func RunDurationGenerated(ctx context.Context, concurrency int,
 	return results
 }
 
-func getClient(cache map[string]*rpc.Client, endpoint string, timeout time.Duration) *rpc.Client {
+// callOnce is the shared per-request execution path used by every runner
+// loop. It honors the rate limiter attached to ctx (if any), captures a
+// completion timestamp, and produces a fully-populated Result.
+func callOnce(ctx context.Context, c *rpc.Client, endpoint, tag, method string, params []interface{}) Result {
+	if err := waitRate(ctx); err != nil {
+		return Result{Endpoint: endpoint, Tag: tag, Err: err, Timestamp: time.Now()}
+	}
+	resp, lat, err := c.Call(ctx, method, params)
+	return Result{
+		Endpoint:  endpoint,
+		Tag:       tag,
+		Response:  resp,
+		Latency:   lat,
+		Err:       err,
+		Timestamp: time.Now(),
+	}
+}
+
+func getClientCtx(ctx context.Context, cache map[string]*rpc.Client, endpoint string, timeout time.Duration) *rpc.Client {
 	if c := cache[endpoint]; c != nil {
 		return c
 	}
-	c := rpc.NewClient(endpoint, timeout)
+	opts, _ := ClientOptionsFromContext(ctx)
+	opts.Timeout = timeout
+	c := rpc.NewClientWithOptions(endpoint, opts)
 	cache[endpoint] = c
 	return c
 }

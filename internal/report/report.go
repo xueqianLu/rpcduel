@@ -115,6 +115,9 @@ func PrintBench(w io.Writer, r BenchReport, format Format) {
 		}
 		fmt.Fprintf(w, "  P95:      %s\n", s.P95)
 		fmt.Fprintf(w, "  P99:      %s\n", s.P99)
+		if s.P999 > 0 {
+			fmt.Fprintf(w, "  P999:     %s\n", s.P999)
+		}
 		if s.Min > 0 || s.Max > 0 {
 			fmt.Fprintf(w, "  Min:      %s\n", s.Min)
 			fmt.Fprintf(w, "  Max:      %s\n", s.Max)
@@ -168,7 +171,7 @@ func WriteBenchCSV(w io.Writer, summaries []bench.Summary) error {
 	if err := cw.Write([]string{
 		"endpoint", "scenario", "total", "errors",
 		"error_rate_pct", "qps",
-		"avg_latency_ms", "p50_latency_ms", "p95_latency_ms", "p99_latency_ms",
+		"avg_latency_ms", "p50_latency_ms", "p95_latency_ms", "p99_latency_ms", "p999_latency_ms",
 		"min_latency_ms", "max_latency_ms",
 	}); err != nil {
 		return err
@@ -186,6 +189,7 @@ func WriteBenchCSV(w io.Writer, summaries []bench.Summary) error {
 			fmt.Sprintf("%.3f", float64(s.P50)/ms),
 			fmt.Sprintf("%.3f", float64(s.P95)/ms),
 			fmt.Sprintf("%.3f", float64(s.P99)/ms),
+			fmt.Sprintf("%.3f", float64(s.P999)/ms),
 			fmt.Sprintf("%.3f", float64(s.Min)/ms),
 			fmt.Sprintf("%.3f", float64(s.Max)/ms),
 		}); err != nil {

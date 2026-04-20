@@ -62,7 +62,7 @@ func TestWriteBenchCSV_Header(t *testing.T) {
 	expected := []string{
 		"endpoint", "scenario", "total", "errors",
 		"error_rate_pct", "qps",
-		"avg_latency_ms", "p50_latency_ms", "p95_latency_ms", "p99_latency_ms",
+		"avg_latency_ms", "p50_latency_ms", "p95_latency_ms", "p99_latency_ms", "p999_latency_ms",
 		"min_latency_ms", "max_latency_ms",
 	}
 	if len(header) != len(expected) {

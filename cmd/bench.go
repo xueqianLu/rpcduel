@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"os"
 	"time"
@@ -37,6 +38,8 @@ var (
 	benchTimeout     time.Duration
 	benchOutput      string
 	benchInputFile   string
+	benchWarmup      time.Duration
+	benchHDROut      string
 )
 
 func init() {
@@ -49,6 +52,8 @@ func init() {
 	benchCmd.Flags().DurationVar(&benchDuration, "duration", 0, "Run for this long instead of fixed request count (e.g. 30s)")
 	benchCmd.Flags().DurationVar(&benchTimeout, "timeout", 30*time.Second, "Per-request timeout")
 	benchCmd.Flags().StringVar(&benchOutput, "output", "text", "Output format: text or json")
+	benchCmd.Flags().DurationVar(&benchWarmup, "warmup", 0, "Discard results from the first N (e.g. 5s) of the run, before measurement begins")
+	benchCmd.Flags().StringVar(&benchHDROut, "hdr-out", "", "Write the HDR percentile distribution log to this file (one file per endpoint, .endpointN suffix)")
 }
 
 // scenarioLabel returns tag if non-empty, otherwise the fallback (e.g. method
@@ -68,13 +73,33 @@ func runBench(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("at least one --rpc endpoint is required")
 	}
 
-	ctx := context.Background()
+	ctx := runnerContext(context.Background())
 	outFmt := report.Format(benchOutput)
 
-	// One metrics collector per endpoint
+	startTime := time.Now()
+	warmupEnd := startTime.Add(benchWarmup)
+	if benchWarmup > 0 {
+		slog.Info("warmup phase started", "duration", benchWarmup)
+	}
+
+	// One metrics collector per endpoint, anchored at warmupEnd so that
+	// QPS reflects only the measurement window.
 	metricsMap := make(map[string]*bench.Metrics)
 	for _, ep := range benchRPCs {
-		metricsMap[ep] = bench.NewMetrics(ep)
+		metricsMap[ep] = bench.NewMetricsAt(ep, warmupEnd)
+	}
+
+	record := func(res runner.Result, fallbackScenario string) {
+		if benchWarmup > 0 && res.Timestamp.Before(warmupEnd) {
+			return
+		}
+		m := metricsMap[res.Endpoint]
+		if m == nil {
+			m = bench.NewMetricsAt(res.Endpoint, warmupEnd)
+			metricsMap[res.Endpoint] = m
+		}
+		m.Record(res.Latency, res.Err != nil)
+		metrics.Observe(res.Endpoint, scenarioLabel(res.Tag, fallbackScenario), res.Latency, res.Err != nil)
 	}
 
 	if benchInputFile != "" {
@@ -111,13 +136,7 @@ func runBench(cmd *cobra.Command, args []string) error {
 					}
 				})
 			for res := range resultCh {
-				m := metricsMap[res.Endpoint]
-				if m == nil {
-					m = bench.NewMetrics(res.Endpoint)
-					metricsMap[res.Endpoint] = m
-				}
-				m.Record(res.Latency, res.Err != nil)
-				metrics.Observe(res.Endpoint, scenarioLabel(res.Tag, ""), res.Latency, res.Err != nil)
+				record(res, "")
 			}
 			requests = nil
 		} else if benchRequests > 0 {
@@ -142,13 +161,7 @@ func runBench(cmd *cobra.Command, args []string) error {
 			}
 			resultCh := runner.Run(ctx, tasks, benchConcurrency, benchTimeout)
 			for res := range resultCh {
-				m := metricsMap[res.Endpoint]
-				if m == nil {
-					m = bench.NewMetrics(res.Endpoint)
-					metricsMap[res.Endpoint] = m
-				}
-				m.Record(res.Latency, res.Err != nil)
-				metrics.Observe(res.Endpoint, scenarioLabel(res.Tag, ""), res.Latency, res.Err != nil)
+				record(res, "")
 			}
 		}
 	} else {
@@ -174,21 +187,28 @@ func runBench(cmd *cobra.Command, args []string) error {
 		}
 
 		for res := range resultCh {
-			m := metricsMap[res.Endpoint]
-			if m == nil {
-				m = bench.NewMetrics(res.Endpoint)
-				metricsMap[res.Endpoint] = m
-			}
-			m.Record(res.Latency, res.Err != nil)
-			metrics.Observe(res.Endpoint, scenarioLabel(res.Tag, benchMethod), res.Latency, res.Err != nil)
+			record(res, benchMethod)
 		}
 	}
 
 	var summaries []bench.Summary
-	for _, ep := range benchRPCs {
+	for i, ep := range benchRPCs {
 		m := metricsMap[ep]
 		m.Finish()
 		summaries = append(summaries, m.Summarize())
+		if benchHDROut != "" {
+			fname := fmt.Sprintf("%s.%d.hdr", benchHDROut, i)
+			f, err := os.Create(fname)
+			if err != nil {
+				slog.Warn("hdr-out: open failed", "file", fname, "err", err)
+				continue
+			}
+			if err := m.WriteHDR(f); err != nil {
+				slog.Warn("hdr-out: write failed", "file", fname, "err", err)
+			}
+			_ = f.Close()
+			slog.Info("hdr-out written", "file", fname, "endpoint", ep)
+		}
 	}
 
 	rep := report.BenchReport{Summaries: summaries}

@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/time/rate"
 
 	"github.com/xueqianLu/rpcduel/internal/clilog"
 	"github.com/xueqianLu/rpcduel/internal/metrics"
 	"github.com/xueqianLu/rpcduel/internal/rpc"
+	"github.com/xueqianLu/rpcduel/internal/runner"
 )
 
 // buildVersion is set by main via SetBuildInfo and used as the default
@@ -36,6 +38,8 @@ var (
 	globalUserAgent    string
 	globalInsecureTLS  bool
 	globalMetricsAddr  string
+	globalRPS          float64
+	globalRPSBurst     int
 
 	// metricsCtx is canceled when the root command exits to gracefully
 	// shut down the metrics HTTP server (if one was started).
@@ -94,6 +98,8 @@ func init() {
 	pf.StringVar(&globalUserAgent, "user-agent", "", "Override the HTTP User-Agent header sent with every RPC request")
 	pf.BoolVar(&globalInsecureTLS, "insecure", false, "Skip TLS certificate verification on outbound HTTPS requests (development only)")
 	pf.StringVar(&globalMetricsAddr, "metrics-addr", "", "If set (e.g. :9090), expose Prometheus metrics at /metrics on this address")
+	pf.Float64Var(&globalRPS, "rps", 0, "Aggregate request rate cap in requests per second (0 = unlimited)")
+	pf.IntVar(&globalRPSBurst, "rps-burst", 0, "Token-bucket burst size for --rps (default: 1, or rounded-up rps)")
 
 	rootCmd.AddCommand(callCmd)
 	rootCmd.AddCommand(diffCmd)
@@ -102,6 +108,24 @@ func init() {
 	rootCmd.AddCommand(datasetCmd)
 	rootCmd.AddCommand(diffTestCmd)
 	rootCmd.AddCommand(benchgenCmd)
+}
+
+// runnerContext returns a context wired with the runner-side options derived
+// from global flags: rpc.Options (so retries/headers/insecure/UA propagate
+// into the worker pool) and an optional rate.Limiter (--rps).
+func runnerContext(parent context.Context) context.Context {
+	ctx := runner.WithClientOptions(parent, rpcOptions(0))
+	if globalRPS > 0 {
+		burst := globalRPSBurst
+		if burst <= 0 {
+			burst = int(globalRPS)
+			if burst < 1 {
+				burst = 1
+			}
+		}
+		ctx = runner.WithRateLimiter(ctx, rate.NewLimiter(rate.Limit(globalRPS), burst))
+	}
+	return ctx
 }
 
 // rpcOptions returns the rpc.Options derived from global flags, with the

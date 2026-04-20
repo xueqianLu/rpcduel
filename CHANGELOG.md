@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- HDR histograms for latency tracking (1µs–60s, 3 sig figs) replacing the
+  prior sort-based percentile calculation. New `p999_latency_ms` column in
+  the bench text/CSV reports and `Summary.P999` field.
+- `--rps` and `--rps-burst` global flags implementing a process-wide
+  token-bucket rate limiter (via `golang.org/x/time/rate`) shared across all
+  workers. Pair runs (`duel`, `replay`) take one token per logical pair.
+- `--warmup <duration>` flag on `bench` and `duel` to discard results from
+  an initial settling window so reported QPS/latency reflect only the
+  steady-state measurement period.
+- `--hdr-out <prefix>` flag on `bench` to dump per-endpoint HDR percentile
+  logs (compatible with `hdr-plot`/`wrk2` tooling) as
+  `<prefix>.<index>.hdr`.
+
+### Fixed
+- Runner entry points (`RunDuration`, `RunN`, `RunPaired`,
+  `PairResultFromDuration`, `RunDurationFromTasks`,
+  `RunDurationGenerated`) previously bypassed global flags `--retries`,
+  `--insecure`, `--header`, and `--user-agent` by constructing
+  `rpc.NewClient` directly. They now propagate the configured options via
+  context, so all runners honor the documented HTTP behavior.
+
+### Added
 - GitHub Actions CI workflow running `go vet`, `go build`, `go test -race`, and
   `golangci-lint` across Linux and macOS on Go 1.23 and 1.24.
 - `golangci-lint` configuration (`.golangci.yml`).

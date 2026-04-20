@@ -37,7 +37,7 @@ It collects real on-chain data, runs response-consistency tests across multiple 
 |---|---|
 | **Direct RPC calls** | Invoke any Ethereum JSON-RPC method from the CLI without hand-writing `curl` commands |
 | **Response diffing** | Deep JSON comparison with hex/decimal normalisation, field ignoring, and order-insensitive array comparison |
-| **Benchmarking** | Concurrent load generation with QPS, avg/P95/P99 latency and error-rate reporting |
+| **Benchmarking** | Concurrent load generation with QPS, HDR-histogram-backed P50/P95/P99/P999 latencies and error-rate reporting; `--rps` token-bucket rate limiting and `--warmup` settling phase |
 | **Duel mode** | Run diff and bench simultaneously against two endpoints |
 | **On-chain dataset collection** | Scan a block range (high → low) via an Ethereum JSON-RPC endpoint using multiple concurrent goroutines and collect blocks, transactions, and accounts ranked by activity; per-account transaction lists are stored in the dataset for efficient replay |
 | **Data-driven consistency tests** | Replay real chain data against two endpoints and classify every difference (`balance_mismatch`, `nonce_mismatch`, `tx_mismatch`, …) |
