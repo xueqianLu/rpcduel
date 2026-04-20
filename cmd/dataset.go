@@ -15,7 +15,7 @@ var datasetCmd = &cobra.Command{
 	Use:   "dataset",
 	Short: "Collect on-chain data by scanning a block range and save a test dataset",
 	Long: `Scan blocks from high to low over a given block range via an Ethereum
-JSON-RPC endpoint and write a standardised JSON dataset file containing blocks,
+JSON-RPC endpoint and write a standardized JSON dataset file containing blocks,
 transactions, and accounts for use with replay and benchgen.`,
 	RunE: runDataset,
 }

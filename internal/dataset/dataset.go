@@ -53,7 +53,7 @@ type Dataset struct {
 	Blocks       []Block       `json:"blocks"`
 }
 
-// Save serialises ds to the JSON file at path (pretty-printed).
+// Save serializes ds to the JSON file at path (pretty-printed).
 // Accounts are sorted by tx_count descending, blocks by number descending,
 // and transactions by block_number ascending.
 func Save(path string, ds *Dataset) error {

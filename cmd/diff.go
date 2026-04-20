@@ -29,15 +29,15 @@ Supports single requests via flags or batch requests from a JSON file.`,
 }
 
 var (
-	diffRPCs        []string
-	diffMethod      string
-	diffParamsStr   string
-	diffInputFile   string
-	diffRepeat      int
-	diffOutput      string
+	diffRPCs         []string
+	diffMethod       string
+	diffParamsStr    string
+	diffInputFile    string
+	diffRepeat       int
+	diffOutput       string
 	diffIgnoreFields []string
 	diffIgnoreOrder  bool
-	diffTimeout     time.Duration
+	diffTimeout      time.Duration
 )
 
 func init() {

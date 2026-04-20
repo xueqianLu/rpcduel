@@ -42,8 +42,8 @@ func NewChainScannerWithOptions(endpoint string, opts rpc.Options) *ChainScanner
 
 // rpcRawBlock is the minimal subset of an Ethereum block used for scanning.
 type rpcRawBlock struct {
-	Number       string      `json:"number"`
-	Transactions []rpcRawTx  `json:"transactions"`
+	Number       string     `json:"number"`
+	Transactions []rpcRawTx `json:"transactions"`
 }
 
 // rpcRawTx is the minimal subset of an Ethereum transaction used for scanning.

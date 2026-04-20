@@ -1,6 +1,6 @@
 // Package replay implements the replay logic: it loads a dataset, generates
 // RPC calls per entity (account / transaction / block), runs them against two
-// endpoints concurrently, and categorises the differences.
+// endpoints concurrently, and categorizes the differences.
 package replay
 
 import (

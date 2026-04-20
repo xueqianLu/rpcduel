@@ -12,18 +12,13 @@ import (
 	"github.com/xueqianLu/rpcduel/internal/rpc"
 )
 
-// Build info populated by main via SetBuildInfo.
-var (
-	buildVersion = "dev"
-	buildCommit  = "none"
-	buildDate    = "unknown"
-)
+// buildVersion is set by main via SetBuildInfo and used as the default
+// User-Agent on outbound RPC requests when no override is supplied.
+var buildVersion = "dev"
 
 // SetBuildInfo is called from main to inject ldflags-provided build metadata.
 func SetBuildInfo(version, commit, date string) {
 	buildVersion = version
-	buildCommit = commit
-	buildDate = date
 	rootCmd.Version = fmt.Sprintf("%s (commit %s, built %s)", version, commit, date)
 }
 
@@ -81,19 +76,23 @@ func init() {
 	rootCmd.AddCommand(benchgenCmd)
 }
 
-// rpcOptions returns the *rpc.Options* derived from global flags, with the
+// rpcOptions returns the rpc.Options derived from global flags, with the
 // supplied per-command timeout applied.
 func rpcOptions(timeout time.Duration) rpc.Options {
+	ua := globalUserAgent
+	if ua == "" {
+		ua = "rpcduel/" + buildVersion
+	}
 	return rpc.Options{
 		Timeout:      timeout,
 		Retries:      globalRetries,
 		RetryBackoff: globalRetryBackoff,
 		Headers:      parseHeaders(globalHeaders),
-		UserAgent:    globalUserAgent,
+		UserAgent:    ua,
 	}
 }
 
-// newRPCClient is a convenience wrapper that builds an rpc.Client honouring
+// newRPCClient is a convenience wrapper that builds an rpc.Client honoring
 // global flags.
 func newRPCClient(endpoint string, timeout time.Duration) *rpc.Client {
 	return rpc.NewClientWithOptions(endpoint, rpcOptions(timeout))
