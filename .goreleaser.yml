@@ -4,6 +4,8 @@ project_name: rpcduel
 before:
   hooks:
     - go mod tidy
+    - sh -c 'go run . man --dir dist/man'
+    - sh -c 'mkdir -p dist/completions && go run . completion bash > dist/completions/rpcduel.bash && go run . completion zsh > dist/completions/rpcduel.zsh && go run . completion fish > dist/completions/rpcduel.fish && go run . completion powershell > dist/completions/rpcduel.ps1'
 
 builds:
   - id: rpcduel
@@ -39,6 +41,13 @@ archives:
     files:
       - LICENSE
       - README.md
+      - CHANGELOG.md
+      - src: dist/man/*
+        dst: man
+        strip_parent: true
+      - src: dist/completions/*
+        dst: completions
+        strip_parent: true
 
 checksum:
   name_template: 'checksums.txt'

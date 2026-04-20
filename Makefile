@@ -4,7 +4,7 @@ GO          ?= go
 GOFLAGS     ?=
 LDFLAGS     ?= -s -w -X main.version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
-.PHONY: all build install test race cover vet lint tidy fmt clean release-snapshot docker ci
+.PHONY: all build install test race cover vet lint tidy fmt clean release-snapshot docker ci manpages completions
 
 all: build
 
@@ -13,6 +13,17 @@ build:
 
 install:
 	$(GO) install $(GOFLAGS) -ldflags='$(LDFLAGS)' .
+
+manpages: build
+	@mkdir -p dist/man
+	./bin/$(BINARY) man --dir dist/man
+
+completions: build
+	@mkdir -p dist/completions
+	./bin/$(BINARY) completion bash       > dist/completions/$(BINARY).bash
+	./bin/$(BINARY) completion zsh        > dist/completions/$(BINARY).zsh
+	./bin/$(BINARY) completion fish       > dist/completions/$(BINARY).fish
+	./bin/$(BINARY) completion powershell > dist/completions/$(BINARY).ps1
 
 test:
 	$(GO) test $(GOFLAGS) -count=1 $(PKG)

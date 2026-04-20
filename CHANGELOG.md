@@ -45,6 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are valid).
 - `make ci` convenience target runs `vet`, `lint`, and `race` together,
   mirroring the GitHub Actions CI job.
+- `make manpages` and `make completions` regenerate man pages and shell
+  completion scripts into `dist/man` and `dist/completions`. Both are bundled
+  in every release archive.
+- New global flag `--metrics-addr` exposes Prometheus metrics at `/metrics`
+  for the duration of any `bench` or `duel` run. Counters track requests
+  (`rpcduel_requests_total`) and diffs (`rpcduel_diffs_total`); a histogram
+  tracks latency (`rpcduel_request_duration_seconds`).
 - `Options.InsecureSkipVerify` (CLI: `--insecure`) to skip TLS certificate
   verification for development against self-signed nodes.
 - `Options.Transport` lets callers inject a custom `http.RoundTripper`

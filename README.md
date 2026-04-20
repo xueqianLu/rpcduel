@@ -93,8 +93,40 @@ These flags apply to every subcommand:
 | `--header` | (none) | Extra HTTP header sent with every RPC request. May be repeated. Accepts `Key: Value` or `Key=Value`. |
 | `--user-agent` | `rpcduel/<version>` | Override the `User-Agent` header. |
 | `--insecure` | `false` | Skip TLS certificate verification on outbound HTTPS requests. **Development only** — never use against production endpoints. |
+| `--metrics-addr` | (disabled) | If set (e.g. `:9090`), expose Prometheus metrics at `/metrics` while the command runs. See [Prometheus metrics](#prometheus-metrics). |
 
 Examples live in [`examples/`](./examples/README.md).
+
+### Shell completions
+
+Cobra ships completion scripts for bash, zsh, fish, and PowerShell:
+
+```sh
+# Bash (current shell)
+source <(rpcduel completion bash)
+# Zsh, persistent
+rpcduel completion zsh > "${fpath[1]}/_rpcduel"
+# Fish
+rpcduel completion fish > ~/.config/fish/completions/rpcduel.fish
+```
+
+Pre-built completion scripts and man pages are bundled in every release archive
+under `completions/` and `man/`.
+
+### Prometheus metrics
+
+Pass `--metrics-addr :9090` to any command to expose a Prometheus-format
+metrics endpoint at `http://localhost:9090/metrics` while the command runs.
+The exporter publishes:
+
+| Metric | Type | Labels |
+|--------|------|--------|
+| `rpcduel_requests_total` | counter | `endpoint`, `scenario`, `status` (`ok`/`error`) |
+| `rpcduel_request_duration_seconds` | histogram | `endpoint`, `scenario` |
+| `rpcduel_diffs_total` | counter | `endpoint_a`, `endpoint_b` |
+
+`scenario` is the per-request tag from the bench scenario file when present,
+otherwise the JSON-RPC method name.
 
 ### `call`
 

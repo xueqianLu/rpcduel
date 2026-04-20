@@ -1,14 +1,18 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/xueqianLu/rpcduel/internal/clilog"
+	"github.com/xueqianLu/rpcduel/internal/metrics"
 	"github.com/xueqianLu/rpcduel/internal/rpc"
 )
 
@@ -31,6 +35,12 @@ var (
 	globalHeaders      []string
 	globalUserAgent    string
 	globalInsecureTLS  bool
+	globalMetricsAddr  string
+
+	// metricsCtx is canceled when the root command exits to gracefully
+	// shut down the metrics HTTP server (if one was started).
+	metricsCtx    context.Context
+	metricsCancel context.CancelFunc
 )
 
 var rootCmd = &cobra.Command{
@@ -47,7 +57,22 @@ var rootCmd = &cobra.Command{
   - Generating benchmark scenario files from datasets (benchgen)`,
 	SilenceUsage: true,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		return clilog.Setup(globalLogLevel, globalLogFormat)
+		if err := clilog.Setup(globalLogLevel, globalLogFormat); err != nil {
+			return err
+		}
+		if globalMetricsAddr != "" {
+			metricsCtx, metricsCancel = signal.NotifyContext(context.Background(),
+				os.Interrupt, syscall.SIGTERM)
+			if err := metrics.StartServer(metricsCtx, globalMetricsAddr); err != nil {
+				return fmt.Errorf("start metrics server: %w", err)
+			}
+		}
+		return nil
+	},
+	PersistentPostRun: func(cmd *cobra.Command, args []string) {
+		if metricsCancel != nil {
+			metricsCancel()
+		}
 	},
 }
 
@@ -68,6 +93,7 @@ func init() {
 	pf.StringArrayVar(&globalHeaders, "header", nil, "Extra HTTP header to send with every RPC request (repeatable, format Key: Value or Key=Value)")
 	pf.StringVar(&globalUserAgent, "user-agent", "", "Override the HTTP User-Agent header sent with every RPC request")
 	pf.BoolVar(&globalInsecureTLS, "insecure", false, "Skip TLS certificate verification on outbound HTTPS requests (development only)")
+	pf.StringVar(&globalMetricsAddr, "metrics-addr", "", "If set (e.g. :9090), expose Prometheus metrics at /metrics on this address")
 
 	rootCmd.AddCommand(callCmd)
 	rootCmd.AddCommand(diffCmd)

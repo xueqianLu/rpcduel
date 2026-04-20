@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/xueqianLu/rpcduel/internal/bench"
 	"github.com/xueqianLu/rpcduel/internal/diff"
+	"github.com/xueqianLu/rpcduel/internal/metrics"
 	"github.com/xueqianLu/rpcduel/internal/report"
 	"github.com/xueqianLu/rpcduel/internal/rpc"
 	"github.com/xueqianLu/rpcduel/internal/runner"
@@ -96,6 +97,9 @@ func runDuel(cmd *cobra.Command, args []string) error {
 		total++
 		metricsA.Record(pair.Left.Latency, pair.Left.Err != nil)
 		metricsB.Record(pair.Right.Latency, pair.Right.Err != nil)
+		scenario := scenarioLabel(pair.Left.Tag, duelMethod)
+		metrics.Observe(epA, scenario, pair.Left.Latency, pair.Left.Err != nil)
+		metrics.Observe(epB, scenario, pair.Right.Latency, pair.Right.Err != nil)
 
 		if pair.Left.Err != nil || pair.Right.Err != nil {
 			if pair.Left.Err == nil || pair.Right.Err == nil {
@@ -117,6 +121,7 @@ func runDuel(cmd *cobra.Command, args []string) error {
 			continue
 		}
 		allDiffs = append(allDiffs, diffs...)
+		metrics.ObserveDiff(epA, epB, len(diffs))
 	}
 
 	diffRate := 0.0

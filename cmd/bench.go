@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/xueqianLu/rpcduel/internal/bench"
 	"github.com/xueqianLu/rpcduel/internal/benchgen"
+	"github.com/xueqianLu/rpcduel/internal/metrics"
 	"github.com/xueqianLu/rpcduel/internal/report"
 	"github.com/xueqianLu/rpcduel/internal/rpc"
 	"github.com/xueqianLu/rpcduel/internal/runner"
@@ -48,6 +49,15 @@ func init() {
 	benchCmd.Flags().DurationVar(&benchDuration, "duration", 0, "Run for this long instead of fixed request count (e.g. 30s)")
 	benchCmd.Flags().DurationVar(&benchTimeout, "timeout", 30*time.Second, "Per-request timeout")
 	benchCmd.Flags().StringVar(&benchOutput, "output", "text", "Output format: text or json")
+}
+
+// scenarioLabel returns tag if non-empty, otherwise the fallback (e.g. method
+// name). Used as the "scenario" label for Prometheus metrics.
+func scenarioLabel(tag, fallback string) string {
+	if tag != "" {
+		return tag
+	}
+	return fallback
 }
 
 func runBench(cmd *cobra.Command, args []string) error {
@@ -107,6 +117,7 @@ func runBench(cmd *cobra.Command, args []string) error {
 					metricsMap[res.Endpoint] = m
 				}
 				m.Record(res.Latency, res.Err != nil)
+				metrics.Observe(res.Endpoint, scenarioLabel(res.Tag, ""), res.Latency, res.Err != nil)
 			}
 			requests = nil
 		} else if benchRequests > 0 {
@@ -137,6 +148,7 @@ func runBench(cmd *cobra.Command, args []string) error {
 					metricsMap[res.Endpoint] = m
 				}
 				m.Record(res.Latency, res.Err != nil)
+				metrics.Observe(res.Endpoint, scenarioLabel(res.Tag, ""), res.Latency, res.Err != nil)
 			}
 		}
 	} else {
@@ -168,6 +180,7 @@ func runBench(cmd *cobra.Command, args []string) error {
 				metricsMap[res.Endpoint] = m
 			}
 			m.Record(res.Latency, res.Err != nil)
+			metrics.Observe(res.Endpoint, scenarioLabel(res.Tag, benchMethod), res.Latency, res.Err != nil)
 		}
 	}
 
