@@ -11,10 +11,12 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/xueqianLu/rpcduel/internal/bench"
 	"github.com/xueqianLu/rpcduel/internal/benchgen"
+	"github.com/xueqianLu/rpcduel/internal/config"
 	"github.com/xueqianLu/rpcduel/internal/metrics"
 	"github.com/xueqianLu/rpcduel/internal/report"
 	"github.com/xueqianLu/rpcduel/internal/rpc"
 	"github.com/xueqianLu/rpcduel/internal/runner"
+	"github.com/xueqianLu/rpcduel/internal/thresholds"
 )
 
 var benchCmd = &cobra.Command{
@@ -40,6 +42,12 @@ var (
 	benchInputFile   string
 	benchWarmup      time.Duration
 	benchHDROut      string
+	benchReportHTML  string
+	benchReportMD    string
+	benchReportJUnit string
+	benchTP95        float64
+	benchTP99        float64
+	benchTErrorRate  float64
 )
 
 func init() {
@@ -54,6 +62,52 @@ func init() {
 	benchCmd.Flags().StringVar(&benchOutput, "output", "text", "Output format: text or json")
 	benchCmd.Flags().DurationVar(&benchWarmup, "warmup", 0, "Discard results from the first N (e.g. 5s) of the run, before measurement begins")
 	benchCmd.Flags().StringVar(&benchHDROut, "hdr-out", "", "Write the HDR percentile distribution log to this file (one file per endpoint, .endpointN suffix)")
+	benchCmd.Flags().StringVar(&benchReportHTML, "report-html", "", "Write a self-contained HTML report to this path")
+	benchCmd.Flags().StringVar(&benchReportMD, "report-md", "", "Write a Markdown report to this path")
+	benchCmd.Flags().StringVar(&benchReportJUnit, "report-junit", "", "Write a JUnit XML report (one testcase per metric) to this path")
+	benchCmd.Flags().Float64Var(&benchTP95, "max-p95-ms", 0, "Fail (exit 2) if any endpoint's P95 latency exceeds this many ms")
+	benchCmd.Flags().Float64Var(&benchTP99, "max-p99-ms", 0, "Fail (exit 2) if any endpoint's P99 latency exceeds this many ms")
+	benchCmd.Flags().Float64Var(&benchTErrorRate, "max-error-rate", 0, "Fail (exit 2) if any endpoint's error rate exceeds this fraction (0..1)")
+}
+
+// fillBenchDefaults applies the bench: section of the loaded config to
+// any flag the user did not explicitly set.
+func fillBenchDefaults(cmd *cobra.Command) {
+	if globalConfig == nil {
+		return
+	}
+	b := globalConfig.Bench
+	f := cmd.Flags()
+	if !f.Changed("method") && b.Method != "" {
+		benchMethod = b.Method
+	}
+	if !f.Changed("params") && b.Params != "" {
+		benchParamsStr = b.Params
+	}
+	if !f.Changed("input") && b.Input != "" {
+		benchInputFile = b.Input
+	}
+	if !f.Changed("concurrency") && b.Concurrency > 0 {
+		benchConcurrency = b.Concurrency
+	}
+	if !f.Changed("requests") && b.Requests > 0 {
+		benchRequests = b.Requests
+	}
+	if !f.Changed("duration") && b.Duration > 0 {
+		benchDuration = b.Duration
+	}
+	if !f.Changed("timeout") && b.Timeout > 0 {
+		benchTimeout = b.Timeout
+	}
+	if !f.Changed("warmup") && b.Warmup > 0 {
+		benchWarmup = b.Warmup
+	}
+	if !f.Changed("output") && b.Output != "" {
+		benchOutput = b.Output
+	}
+	if !f.Changed("hdr-out") && b.HDROut != "" {
+		benchHDROut = b.HDROut
+	}
 }
 
 // scenarioLabel returns tag if non-empty, otherwise the fallback (e.g. method
@@ -66,9 +120,11 @@ func scenarioLabel(tag, fallback string) string {
 }
 
 func runBench(cmd *cobra.Command, args []string) error {
+	fillBenchDefaults(cmd)
 	if err := validateOutputFormat(benchOutput); err != nil {
 		return err
 	}
+	benchRPCs = rpcsFromConfig(benchRPCs)
 	if len(benchRPCs) == 0 {
 		return fmt.Errorf("at least one --rpc endpoint is required")
 	}
@@ -213,5 +269,34 @@ func runBench(cmd *cobra.Command, args []string) error {
 
 	rep := report.BenchReport{Summaries: summaries}
 	report.PrintBench(os.Stdout, rep, outFmt)
+
+	t := config.BenchThresholds{}
+	if globalConfig != nil {
+		t = globalConfig.Thresholds.Bench
+	}
+	if cmd.Flags().Changed("max-p95-ms") {
+		t.P95Ms = benchTP95
+	}
+	if cmd.Flags().Changed("max-p99-ms") {
+		t.P99Ms = benchTP99
+	}
+	if cmd.Flags().Changed("max-error-rate") {
+		t.ErrorRate = benchTErrorRate
+	}
+	configured := thresholds.AnyConfiguredBench(t)
+	breaches := thresholds.EvalBench(summaries, t)
+
+	htmlOut, mdOut, junitOut := reportPaths(benchReportHTML, benchReportMD, benchReportJUnit)
+	if err := writeFile(htmlOut, func(w *os.File) error { return report.WriteBenchHTML(w, rep, breaches, configured) }); err != nil {
+		return err
+	}
+	if err := writeFile(mdOut, func(w *os.File) error { return report.WriteBenchMarkdown(w, rep, breaches, configured) }); err != nil {
+		return err
+	}
+	if err := writeFile(junitOut, func(w *os.File) error { return report.WriteBenchJUnit(w, rep, breaches) }); err != nil {
+		return err
+	}
+
+	emitBreaches(breaches, configured)
 	return nil
 }

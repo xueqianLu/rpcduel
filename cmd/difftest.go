@@ -9,9 +9,12 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/xueqianLu/rpcduel/internal/config"
 	"github.com/xueqianLu/rpcduel/internal/dataset"
 	"github.com/xueqianLu/rpcduel/internal/diff"
 	"github.com/xueqianLu/rpcduel/internal/replay"
+	"github.com/xueqianLu/rpcduel/internal/report"
+	"github.com/xueqianLu/rpcduel/internal/thresholds"
 )
 
 var diffTestCmd = &cobra.Command{
@@ -37,6 +40,12 @@ var (
 	diffTestConcurrency      int
 	diffTestReport           string
 	diffTestCSV              string
+	diffTestReportHTML       string
+	diffTestReportMD         string
+	diffTestReportJUnit      string
+	diffTestTMismatchRate    float64
+	diffTestTErrorRate       float64
+	diffTestTMaxMismatch     int
 )
 
 func init() {
@@ -57,12 +66,62 @@ func init() {
 	diffTestCmd.Flags().IntVar(&diffTestConcurrency, "concurrency", 4, "Number of goroutines used to execute RPC calls")
 	diffTestCmd.Flags().StringVar(&diffTestReport, "report", "", "Write the report to this file (in addition to stdout)")
 	diffTestCmd.Flags().StringVar(&diffTestCSV, "csv", "", "Write a CSV report of all diffs to this file")
+	diffTestCmd.Flags().StringVar(&diffTestReportHTML, "report-html", "", "Write a self-contained HTML report to this path")
+	diffTestCmd.Flags().StringVar(&diffTestReportMD, "report-md", "", "Write a Markdown report to this path")
+	diffTestCmd.Flags().StringVar(&diffTestReportJUnit, "report-junit", "", "Write a JUnit XML report to this path")
+	diffTestCmd.Flags().Float64Var(&diffTestTMismatchRate, "max-mismatch-rate", 0, "Fail (exit 2) if mismatch rate exceeds this fraction (0..1)")
+	diffTestCmd.Flags().Float64Var(&diffTestTErrorRate, "max-error-rate", 0, "Fail (exit 2) if RPC error rate exceeds this fraction (0..1)")
+	diffTestCmd.Flags().IntVar(&diffTestTMaxMismatch, "max-mismatch", 0, "Fail (exit 2) if more than this many mismatches are observed")
+}
+
+// fillReplayDefaults applies the replay: section of the loaded config.
+func fillReplayDefaults(cmd *cobra.Command) {
+	if globalConfig == nil {
+		return
+	}
+	r := globalConfig.Replay
+	f := cmd.Flags()
+	if !f.Changed("dataset") && r.Dataset != "" {
+		diffTestDataset = r.Dataset
+	}
+	if !f.Changed("max-tx-per-account") && r.MaxTxPerAccount > 0 {
+		diffTestMaxTxPerAccount = r.MaxTxPerAccount
+	}
+	if !f.Changed("trace-transaction") && r.TraceTransaction {
+		diffTestTraceTransaction = true
+	}
+	if !f.Changed("trace-block") && r.TraceBlock {
+		diffTestTraceBlock = true
+	}
+	if !f.Changed("only") && len(r.Only) > 0 {
+		diffTestOnly = append([]string{}, r.Only...)
+	}
+	if !f.Changed("ignore-field") && len(r.IgnoreFields) > 0 {
+		diffTestIgnoreFields = append([]string{}, r.IgnoreFields...)
+	}
+	if !f.Changed("timeout") && r.Timeout > 0 {
+		diffTestTimeout = r.Timeout
+	}
+	if !f.Changed("concurrency") && r.Concurrency > 0 {
+		diffTestConcurrency = r.Concurrency
+	}
+	if !f.Changed("output") && r.Output != "" {
+		diffTestOutput = r.Output
+	}
+	if !f.Changed("report") && r.Report != "" {
+		diffTestReport = r.Report
+	}
+	if !f.Changed("csv") && r.CSV != "" {
+		diffTestCSV = r.CSV
+	}
 }
 
 func runDiffTest(cmd *cobra.Command, args []string) error {
+	fillReplayDefaults(cmd)
 	if err := validateOutputFormat(diffTestOutput); err != nil {
 		return err
 	}
+	diffTestRPCs = rpcsFromConfig(diffTestRPCs)
 	if len(diffTestRPCs) != 2 {
 		return fmt.Errorf("exactly 2 --rpc endpoints are required")
 	}
@@ -130,6 +189,35 @@ func runDiffTest(cmd *cobra.Command, args []string) error {
 		}
 		slog.Info("CSV report written", "path", diffTestCSV)
 	}
+
+	t := config.ReplayThresholds{}
+	if globalConfig != nil {
+		t = globalConfig.Thresholds.Replay
+	}
+	if cmd.Flags().Changed("max-mismatch-rate") {
+		t.MismatchRate = diffTestTMismatchRate
+	}
+	if cmd.Flags().Changed("max-error-rate") {
+		t.ErrorRate = diffTestTErrorRate
+	}
+	if cmd.Flags().Changed("max-mismatch") {
+		t.MaxMismatch = diffTestTMaxMismatch
+	}
+	configured := thresholds.AnyConfiguredReplay(t)
+	breaches := thresholds.EvalReplay(result, t)
+
+	htmlOut, mdOut, junitOut := reportPaths(diffTestReportHTML, diffTestReportMD, diffTestReportJUnit)
+	if err := writeFile(htmlOut, func(w *os.File) error { return report.WriteReplayHTML(w, result, breaches, configured) }); err != nil {
+		return err
+	}
+	if err := writeFile(mdOut, func(w *os.File) error { return report.WriteReplayMarkdown(w, result, breaches, configured) }); err != nil {
+		return err
+	}
+	if err := writeFile(junitOut, func(w *os.File) error { return report.WriteReplayJUnit(w, result, breaches) }); err != nil {
+		return err
+	}
+
+	emitBreaches(breaches, configured)
 	return nil
 }
 

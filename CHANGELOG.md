@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- YAML configuration file support. New global `--config / -c PATH` flag
+  loads a `rpcduel.yaml` describing endpoints, per-section defaults
+  (bench, duel, diff, replay), SLO thresholds, and report destinations.
+  Environment variables expand inline via `${VAR}` and `${VAR:-default}`
+  (literal `$$` escapes to `$`). CLI flags always override config
+  values; config endpoints are used only when `--rpc` is not passed.
+  Per-endpoint headers may be defined and merge over global
+  `defaults.headers`. See `examples/rpcduel.yaml` for the full schema.
+- SLO threshold gating for CI use. Each verb command accepts new
+  shortcut flags (e.g. `--max-p99-ms`, `--max-error-rate`,
+  `--max-diff-rate`, `--max-mismatch-rate`, `--max-mismatch`,
+  `--max-diffs`) and reads the same limits from `thresholds:` in the
+  config file. On any breach, rpcduel prints a `FAIL` summary to stderr
+  listing each (endpoint, metric, limit, observed) tuple and exits with
+  code 2 (distinct from the normal error code 1). When no thresholds
+  are configured, behavior is unchanged.
+- HTML, Markdown, and JUnit report exporters for `bench`, `duel`,
+  `diff`, and `replay`. New per-command flags `--report-html PATH`,
+  `--report-md PATH`, `--report-junit PATH` (also configurable via
+  `reports.{html,markdown,junit}`) write self-contained reports
+  alongside the existing stdout output. The HTML report has no external
+  dependencies (inline CSS, inline bar charts) and embeds the
+  PASS/FAIL banner; the JUnit XML produces one `<testcase>` per metric
+  per endpoint, turning each threshold breach into a `<failure>` so
+  CI runners (GitHub Actions test reporter, Jenkins, etc.) can surface
+  rpcduel results natively.
+
 ## [0.1.0] - 2026-04-20
 
 First public release.

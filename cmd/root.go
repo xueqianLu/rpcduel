@@ -13,6 +13,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/xueqianLu/rpcduel/internal/clilog"
+	"github.com/xueqianLu/rpcduel/internal/config"
 	"github.com/xueqianLu/rpcduel/internal/metrics"
 	"github.com/xueqianLu/rpcduel/internal/rpc"
 	"github.com/xueqianLu/rpcduel/internal/runner"
@@ -40,6 +41,8 @@ var (
 	globalMetricsAddr  string
 	globalRPS          float64
 	globalRPSBurst     int
+	globalConfigPath   string
+	globalConfig       *config.Config
 
 	// metricsCtx is canceled when the root command exits to gracefully
 	// shut down the metrics HTTP server (if one was started).
@@ -61,6 +64,14 @@ var rootCmd = &cobra.Command{
   - Generating benchmark scenario files from datasets (benchgen)`,
 	SilenceUsage: true,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		if globalConfigPath != "" {
+			cfg, err := config.Load(globalConfigPath)
+			if err != nil {
+				return err
+			}
+			globalConfig = cfg
+			applyConfigDefaults(cmd, cfg)
+		}
 		if err := clilog.Setup(globalLogLevel, globalLogFormat); err != nil {
 			return err
 		}
@@ -100,6 +111,7 @@ func init() {
 	pf.StringVar(&globalMetricsAddr, "metrics-addr", "", "If set (e.g. :9090), expose Prometheus metrics at /metrics on this address")
 	pf.Float64Var(&globalRPS, "rps", 0, "Aggregate request rate cap in requests per second (0 = unlimited)")
 	pf.IntVar(&globalRPSBurst, "rps-burst", 0, "Token-bucket burst size for --rps (default: 1, or rounded-up rps)")
+	pf.StringVarP(&globalConfigPath, "config", "c", "", "Path to rpcduel.yaml config file")
 
 	rootCmd.AddCommand(callCmd)
 	rootCmd.AddCommand(diffCmd)

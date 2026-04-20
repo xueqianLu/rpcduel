@@ -9,9 +9,11 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/xueqianLu/rpcduel/internal/config"
 	"github.com/xueqianLu/rpcduel/internal/diff"
 	"github.com/xueqianLu/rpcduel/internal/report"
 	"github.com/xueqianLu/rpcduel/internal/rpc"
+	"github.com/xueqianLu/rpcduel/internal/thresholds"
 )
 
 // BatchRequest holds a JSON-RPC request from an input file.
@@ -38,6 +40,11 @@ var (
 	diffIgnoreFields []string
 	diffIgnoreOrder  bool
 	diffTimeout      time.Duration
+	diffReportHTML   string
+	diffReportMD     string
+	diffReportJUnit  string
+	diffTDiffRate    float64
+	diffTMaxDiffs    int
 )
 
 func init() {
@@ -50,12 +57,52 @@ func init() {
 	diffCmd.Flags().StringArrayVar(&diffIgnoreFields, "ignore-field", nil, "JSON field names to ignore in comparison")
 	diffCmd.Flags().BoolVar(&diffIgnoreOrder, "ignore-order", false, "Treat arrays as unordered sets")
 	diffCmd.Flags().DurationVar(&diffTimeout, "timeout", 30*time.Second, "Request timeout")
+	diffCmd.Flags().StringVar(&diffReportHTML, "report-html", "", "Write a self-contained HTML report to this path")
+	diffCmd.Flags().StringVar(&diffReportMD, "report-md", "", "Write a Markdown report to this path")
+	diffCmd.Flags().StringVar(&diffReportJUnit, "report-junit", "", "Write a JUnit XML report to this path")
+	diffCmd.Flags().Float64Var(&diffTDiffRate, "max-diff-rate", 0, "Fail (exit 2) if the response-mismatch rate exceeds this fraction (0..1)")
+	diffCmd.Flags().IntVar(&diffTMaxDiffs, "max-diffs", 0, "Fail (exit 2) if more than this many diffs are observed")
+}
+
+// fillDiffDefaults applies the diff: section of the loaded config.
+func fillDiffDefaults(cmd *cobra.Command) {
+	if globalConfig == nil {
+		return
+	}
+	d := globalConfig.Diff
+	f := cmd.Flags()
+	if !f.Changed("method") && d.Method != "" {
+		diffMethod = d.Method
+	}
+	if !f.Changed("params") && d.Params != "" {
+		diffParamsStr = d.Params
+	}
+	if !f.Changed("input") && d.Input != "" {
+		diffInputFile = d.Input
+	}
+	if !f.Changed("repeat") && d.Repeat > 0 {
+		diffRepeat = d.Repeat
+	}
+	if !f.Changed("timeout") && d.Timeout > 0 {
+		diffTimeout = d.Timeout
+	}
+	if !f.Changed("output") && d.Output != "" {
+		diffOutput = d.Output
+	}
+	if !f.Changed("ignore-field") && len(d.IgnoreFields) > 0 {
+		diffIgnoreFields = append([]string{}, d.IgnoreFields...)
+	}
+	if !f.Changed("ignore-order") && d.IgnoreOrder {
+		diffIgnoreOrder = true
+	}
 }
 
 func runDiff(cmd *cobra.Command, args []string) error {
+	fillDiffDefaults(cmd)
 	if err := validateOutputFormat(diffOutput); err != nil {
 		return err
 	}
+	diffRPCs = rpcsFromConfig(diffRPCs)
 	if len(diffRPCs) < 2 {
 		return fmt.Errorf("at least 2 --rpc endpoints are required")
 	}
@@ -123,6 +170,32 @@ func runDiff(cmd *cobra.Command, args []string) error {
 		Diffs:     allDiffs,
 	}
 	report.PrintDiff(os.Stdout, rep, outFmt)
+
+	t := config.DiffThresholds{}
+	if globalConfig != nil {
+		t = globalConfig.Thresholds.Diff
+	}
+	if cmd.Flags().Changed("max-diff-rate") {
+		t.DiffRate = diffTDiffRate
+	}
+	if cmd.Flags().Changed("max-diffs") {
+		t.MaxDiffs = diffTMaxDiffs
+	}
+	configured := thresholds.AnyConfiguredDiff(t)
+	breaches := thresholds.EvalDiff(rep.Total, rep.DiffCount, t)
+
+	htmlOut, mdOut, junitOut := reportPaths(diffReportHTML, diffReportMD, diffReportJUnit)
+	if err := writeFile(htmlOut, func(w *os.File) error { return report.WriteDiffHTML(w, rep, breaches, configured) }); err != nil {
+		return err
+	}
+	if err := writeFile(mdOut, func(w *os.File) error { return report.WriteDiffMarkdown(w, rep, breaches, configured) }); err != nil {
+		return err
+	}
+	if err := writeFile(junitOut, func(w *os.File) error { return report.WriteDiffJUnit(w, rep, breaches) }); err != nil {
+		return err
+	}
+
+	emitBreaches(breaches, configured)
 	return nil
 }
 

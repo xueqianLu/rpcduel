@@ -1,0 +1,87 @@
+# Sample rpcduel configuration. Pass via `rpcduel --config rpcduel.yaml ...`.
+# Every section is optional. CLI flags always win over config values.
+# Environment variables expand as ${VAR} or ${VAR:-default}; use $$ for a literal $.
+
+version: 1
+
+endpoints:
+  - name: geth
+    url: http://localhost:8545
+    headers:
+      X-Source: rpcduel
+  - name: erigon
+    url: ${ERIGON_URL:-http://localhost:8546}
+    headers:
+      Authorization: Bearer ${ERIGON_TOKEN}
+
+defaults:
+  log_level: info
+  log_format: text
+  retries: 2
+  insecure: false
+  user_agent: rpcduel/0.2.0
+  headers:
+    X-Run-Id: ${GITHUB_RUN_ID:-local}
+
+bench:
+  method: eth_blockNumber
+  params: "[]"
+  concurrency: 16
+  requests: 0
+  duration: 30s
+  timeout: 10s
+  warmup: 5s
+  output: text
+
+duel:
+  method: eth_getBlockByNumber
+  params: '["latest", false]'
+  concurrency: 8
+  duration: 30s
+  timeout: 10s
+  warmup: 5s
+  ignore_fields: [hash, miner]
+  ignore_order: false
+
+diff:
+  method: eth_getLogs
+  params: '[{"fromBlock":"latest"}]'
+  repeat: 5
+  timeout: 10s
+  ignore_fields: [transactionIndex]
+
+replay:
+  dataset: dataset.json
+  max_tx_per_account: 5
+  trace_transaction: false
+  trace_block: false
+  ignore_fields: [hash]
+  timeout: 10s
+  concurrency: 4
+  report: replay.txt
+  csv: replay.csv
+
+# SLO thresholds for CI gating. Zero / unset means "do not check".
+# Any breach prints a FAIL summary to stderr and exits with code 2.
+thresholds:
+  bench:
+    p95_ms: 250
+    p99_ms: 500
+    error_rate: 0.01     # 1%
+  duel:
+    p99_ms: 500
+    error_rate: 0.01
+    diff_rate: 0.001     # 0.1% mismatch
+  diff:
+    diff_rate: 0.0
+    max_diffs: 0
+  replay:
+    mismatch_rate: 0.001
+    error_rate: 0.01
+    max_mismatch: 5
+
+# Default report destinations. CLI --report-html / --report-md / --report-junit override these.
+reports:
+  html: report.html
+  markdown: report.md
+  junit: report.junit.xml
