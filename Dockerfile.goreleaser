@@ -1,0 +1,5 @@
+# Used by goreleaser; expects the binary to be pre-built in the build context.
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY rpcduel /usr/local/bin/rpcduel
+USER nonroot:nonroot
+ENTRYPOINT ["/usr/local/bin/rpcduel"]

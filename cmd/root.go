@@ -7,9 +7,25 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Build info populated by main via SetBuildInfo.
+var (
+	buildVersion = "dev"
+	buildCommit  = "none"
+	buildDate    = "unknown"
+)
+
+// SetBuildInfo is called from main to inject ldflags-provided build metadata.
+func SetBuildInfo(version, commit, date string) {
+	buildVersion = version
+	buildCommit = commit
+	buildDate = date
+	rootCmd.Version = fmt.Sprintf("%s (commit %s, built %s)", version, commit, date)
+}
+
 var rootCmd = &cobra.Command{
-	Use:   "rpcduel",
-	Short: "A CLI tool for comparing and benchmarking Ethereum JSON-RPC endpoints",
+	Use:     "rpcduel",
+	Version: "dev",
+	Short:   "A CLI tool for comparing and benchmarking Ethereum JSON-RPC endpoints",
 	Long: `rpcduel is a high-performance CLI tool for:
 	- Calling Ethereum JSON-RPC methods directly (call)
   - Comparing responses from multiple Ethereum JSON-RPC nodes (diff)

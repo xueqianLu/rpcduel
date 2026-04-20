@@ -1,5 +1,12 @@
 # rpcduel
 
+[![CI](https://github.com/xueqianLu/rpcduel/actions/workflows/ci.yml/badge.svg)](https://github.com/xueqianLu/rpcduel/actions/workflows/ci.yml)
+[![Release](https://github.com/xueqianLu/rpcduel/actions/workflows/release.yml/badge.svg)](https://github.com/xueqianLu/rpcduel/actions/workflows/release.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/xueqianLu/rpcduel.svg)](https://pkg.go.dev/github.com/xueqianLu/rpcduel)
+[![Go Report Card](https://goreportcard.com/badge/github.com/xueqianLu/rpcduel)](https://goreportcard.com/report/github.com/xueqianLu/rpcduel)
+[![License: MIT](https://img.shields.io/github/license/xueqianLu/rpcduel)](LICENSE)
+[![Latest Release](https://img.shields.io/github/v/release/xueqianLu/rpcduel?sort=semver)](https://github.com/xueqianLu/rpcduel/releases)
+
 **rpcduel** is a high-performance CLI tool for comparing and benchmarking Ethereum JSON-RPC endpoints.  
 It collects real on-chain data, runs response-consistency tests across multiple nodes, and generates realistic load-test scenarios — all from a single binary.
 
@@ -42,19 +49,32 @@ It collects real on-chain data, runs response-consistency tests across multiple 
 
 ## Installation
 
+### Prebuilt binaries
+
+Download the archive for your OS/arch from the [latest release](https://github.com/xueqianLu/rpcduel/releases),
+extract it, and put `rpcduel` somewhere on your `PATH`.
+
+### Docker
+
+```bash
+docker run --rm ghcr.io/xueqianlu/rpcduel:latest call --rpc https://rpc.example.com
+```
+
+### Go install
+
 ```bash
 go install github.com/xueqianLu/rpcduel@latest
 ```
 
-Or build from source:
+### Build from source
 
 ```bash
 git clone https://github.com/xueqianLu/rpcduel.git
 cd rpcduel
-go build -o rpcduel .
+make build      # produces ./bin/rpcduel
 ```
 
-Requires **Go 1.21+**.
+Requires **Go 1.23+**.
 
 ---
 

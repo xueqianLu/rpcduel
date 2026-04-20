@@ -1,0 +1,13 @@
+.git
+.github
+.idea
+.vscode
+bin
+dist
+coverage.*
+*.test
+*.out
+README.md
+LICENSE
+Dockerfile*
+.dockerignore

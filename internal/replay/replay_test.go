@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/xueqianLu/rpcduel/internal/dataset"
@@ -243,6 +244,7 @@ func TestRun_AddsTraceTasks(t *testing.T) {
 		Method string
 		Params string
 	}
+	var mu sync.Mutex
 	seen := make(map[requestShape]int)
 
 	handler := func(w http.ResponseWriter, r *http.Request) {
@@ -256,7 +258,9 @@ func TestRun_AddsTraceTasks(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		paramsJSON, _ := json.Marshal(req.Params)
+		mu.Lock()
 		seen[requestShape{Method: req.Method, Params: string(paramsJSON)}]++
+		mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"jsonrpc": "2.0",
 			"id":      req.ID,
@@ -303,6 +307,7 @@ func TestRun_DeduplicatesSameMethodAndParams(t *testing.T) {
 		Method string
 		Params string
 	}
+	var mu sync.Mutex
 	seen := make(map[requestShape]int)
 
 	handler := func(w http.ResponseWriter, r *http.Request) {
@@ -316,7 +321,9 @@ func TestRun_DeduplicatesSameMethodAndParams(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		paramsJSON, _ := json.Marshal(req.Params)
+		mu.Lock()
 		seen[requestShape{Method: req.Method, Params: string(paramsJSON)}]++
+		mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"jsonrpc": "2.0",
 			"id":      req.ID,

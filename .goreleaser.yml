@@ -1,0 +1,113 @@
+version: 2
+project_name: rpcduel
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: rpcduel
+    main: .
+    binary: rpcduel
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .Commit }}
+      - -X main.date={{ .Date }}
+
+archives:
+  - id: default
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  groups:
+    - title: Features
+      regexp: "^.*feat[(\\w)]*:+.*$"
+      order: 0
+    - title: Bug fixes
+      regexp: "^.*fix[(\\w)]*:+.*$"
+      order: 1
+    - title: Others
+      order: 999
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - Merge pull request
+      - Merge branch
+
+dockers:
+  - image_templates:
+      - "ghcr.io/xueqianlu/rpcduel:{{ .Version }}-amd64"
+      - "ghcr.io/xueqianlu/rpcduel:latest-amd64"
+    use: buildx
+    goos: linux
+    goarch: amd64
+    dockerfile: Dockerfile.goreleaser
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.source=https://github.com/xueqianLu/rpcduel"
+      - "--label=org.opencontainers.image.title=rpcduel"
+      - "--label=org.opencontainers.image.description=Compare and benchmark Ethereum JSON-RPC endpoints"
+      - "--label=org.opencontainers.image.licenses=MIT"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .Commit }}"
+  - image_templates:
+      - "ghcr.io/xueqianlu/rpcduel:{{ .Version }}-arm64"
+      - "ghcr.io/xueqianlu/rpcduel:latest-arm64"
+    use: buildx
+    goos: linux
+    goarch: arm64
+    dockerfile: Dockerfile.goreleaser
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.source=https://github.com/xueqianLu/rpcduel"
+      - "--label=org.opencontainers.image.title=rpcduel"
+      - "--label=org.opencontainers.image.description=Compare and benchmark Ethereum JSON-RPC endpoints"
+      - "--label=org.opencontainers.image.licenses=MIT"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .Commit }}"
+
+docker_manifests:
+  - name_template: "ghcr.io/xueqianlu/rpcduel:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/xueqianlu/rpcduel:{{ .Version }}-amd64"
+      - "ghcr.io/xueqianlu/rpcduel:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/xueqianlu/rpcduel:latest"
+    image_templates:
+      - "ghcr.io/xueqianlu/rpcduel:latest-amd64"
+      - "ghcr.io/xueqianlu/rpcduel:latest-arm64"
+
+release:
+  draft: false
+  prerelease: auto

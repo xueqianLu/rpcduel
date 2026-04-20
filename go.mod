@@ -1,6 +1,6 @@
 module github.com/xueqianLu/rpcduel
 
-go 1.24.13
+go 1.23
 
 require github.com/spf13/cobra v1.8.1
 
