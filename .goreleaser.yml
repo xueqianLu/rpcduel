@@ -4,8 +4,8 @@ project_name: rpcduel
 before:
   hooks:
     - go mod tidy
-    - sh -c 'go run . man --dir dist/man'
-    - sh -c 'mkdir -p dist/completions && go run . completion bash > dist/completions/rpcduel.bash && go run . completion zsh > dist/completions/rpcduel.zsh && go run . completion fish > dist/completions/rpcduel.fish && go run . completion powershell > dist/completions/rpcduel.ps1'
+    - sh -c 'go run . man --dir extras/man'
+    - sh -c 'mkdir -p extras/completions && go run . completion bash > extras/completions/rpcduel.bash && go run . completion zsh > extras/completions/rpcduel.zsh && go run . completion fish > extras/completions/rpcduel.fish && go run . completion powershell > extras/completions/rpcduel.ps1'
 
 builds:
   - id: rpcduel
@@ -42,10 +42,10 @@ archives:
       - LICENSE
       - README.md
       - CHANGELOG.md
-      - src: dist/man/*
+      - src: extras/man/*
         dst: man
         strip_parent: true
-      - src: dist/completions/*
+      - src: extras/completions/*
         dst: completions
         strip_parent: true
 
