@@ -42,7 +42,7 @@ func (e *RPCError) Error() string {
 
 var idCounter int64
 
-// Options controls the behaviour of a Client beyond the basics.
+// Options controls the behavior of a Client beyond the basics.
 type Options struct {
 	// Timeout is the per-attempt HTTP request timeout. Required.
 	Timeout time.Duration

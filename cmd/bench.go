@@ -138,7 +138,7 @@ func runBench(cmd *cobra.Command, args []string) error {
 		}
 	} else {
 		// ----------------------------------------------------------------
-		// Single-method mode (original behaviour).
+		// Single-method mode (original behavior).
 		// ----------------------------------------------------------------
 		params, err := rpc.ParseParams(benchParamsStr)
 		if err != nil {

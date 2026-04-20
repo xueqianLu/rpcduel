@@ -103,7 +103,7 @@ type Config struct {
 	TraceTransaction bool
 	TraceBlock       bool
 	Only             map[string]bool
-	// RPCOptions controls the underlying RPC client behaviour (timeout,
+	// RPCOptions controls the underlying RPC client behavior (timeout,
 	// retries, headers, ...). When zero-valued, sensible defaults are used.
 	RPCOptions rpc.Options
 }

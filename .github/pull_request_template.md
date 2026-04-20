@@ -19,5 +19,5 @@ $ make test
 
 - [ ] Tests added or updated
 - [ ] `make test lint` passes locally
-- [ ] `README.md` and/or `CHANGELOG.md` updated if user-visible behaviour changed
+- [ ] `README.md` and/or `CHANGELOG.md` updated if user-visible behavior changed
 - [ ] Commit messages follow Conventional Commits

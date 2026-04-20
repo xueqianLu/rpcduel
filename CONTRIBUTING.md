@@ -71,7 +71,7 @@ This makes the auto-generated changelog readable.
 ## Pull requests
 
 1. Fork and create a feature branch from `main`.
-2. Add tests that exercise the new behaviour.
+2. Add tests that exercise the new behavior.
 3. Run `make test lint` locally and make sure CI is green.
 4. Keep the PR focused — split unrelated changes into separate PRs.
 5. Update `CHANGELOG.md` under the `Unreleased` section.

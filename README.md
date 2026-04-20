@@ -97,7 +97,7 @@ Examples live in [`examples/`](./examples/README.md).
 
 ### `call`
 
-Call any JSON-RPC method directly against a single endpoint. This is the fastest way to replace one-off `curl` commands when debugging or exploring node behaviour.
+Call any JSON-RPC method directly against a single endpoint. This is the fastest way to replace one-off `curl` commands when debugging or exploring node behavior.
 
 ```
 rpcduel call [method] [param...] [flags]

@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// Options configures the diff engine behaviour.
+// Options configures the diff engine behavior.
 type Options struct {
 	// IgnoreFields is a set of JSON key names to skip during comparison.
 	IgnoreFields map[string]bool
