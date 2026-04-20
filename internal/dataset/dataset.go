@@ -9,11 +9,20 @@ import (
 	"sort"
 )
 
+// SchemaVersion is the current dataset schema version. Files written by
+// Save embed this value in Meta.SchemaVersion. Load accepts datasets with
+// either no version (legacy v0) or a version <= SchemaVersion; newer files
+// are rejected with a clear error so users can upgrade rpcduel.
+const SchemaVersion = 1
+
 // Meta holds metadata about a collected dataset.
 type Meta struct {
-	Chain       string `json:"chain"`
-	RPC         string `json:"rpc"`
-	GeneratedAt string `json:"generated_at"`
+	// SchemaVersion is the dataset file format version. Files written by
+	// older versions of rpcduel may omit this field (treated as 0).
+	SchemaVersion int    `json:"schema_version,omitempty"`
+	Chain         string `json:"chain"`
+	RPC           string `json:"rpc"`
+	GeneratedAt   string `json:"generated_at"`
 }
 
 // Account is a chain account with its observed transaction count and the
@@ -70,6 +79,9 @@ func Save(path string, ds *Dataset) error {
 		return ds.Transactions[i].BlockNumber < ds.Transactions[j].BlockNumber
 	})
 
+	// Stamp the current schema version on every Save.
+	ds.Meta.SchemaVersion = SchemaVersion
+
 	data, err := json.MarshalIndent(ds, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal dataset: %w", err)
@@ -80,7 +92,10 @@ func Save(path string, ds *Dataset) error {
 	return nil
 }
 
-// Load reads a dataset from the JSON file at path.
+// Load reads a dataset from the JSON file at path. Datasets written by older
+// rpcduel versions (no schema_version field) are accepted as legacy v0.
+// Datasets carrying a schema_version newer than the one this binary
+// understands are rejected.
 func Load(path string) (*Dataset, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -89,6 +104,11 @@ func Load(path string) (*Dataset, error) {
 	var ds Dataset
 	if err := json.Unmarshal(data, &ds); err != nil {
 		return nil, fmt.Errorf("parse dataset %s: %w", path, err)
+	}
+	if ds.Meta.SchemaVersion > SchemaVersion {
+		return nil, fmt.Errorf(
+			"dataset %s has schema_version=%d, which is newer than this binary supports (max %d); please upgrade rpcduel",
+			path, ds.Meta.SchemaVersion, SchemaVersion)
 	}
 	return &ds, nil
 }

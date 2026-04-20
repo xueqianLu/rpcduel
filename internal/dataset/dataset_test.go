@@ -1,8 +1,10 @@
 package dataset_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/xueqianLu/rpcduel/internal/dataset"
@@ -161,5 +163,55 @@ func TestLoad_InvalidJSON(t *testing.T) {
 	_, err := dataset.Load(path)
 	if err == nil {
 		t.Error("expected error for invalid JSON")
+	}
+}
+
+func TestSave_StampsSchemaVersion(t *testing.T) {
+	ds := &dataset.Dataset{Meta: dataset.Meta{Chain: "x"}}
+	path := filepath.Join(t.TempDir(), "sv.json")
+	if err := dataset.Save(path, ds); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := dataset.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.Meta.SchemaVersion != dataset.SchemaVersion {
+		t.Errorf("schema_version: got %d want %d", loaded.Meta.SchemaVersion, dataset.SchemaVersion)
+	}
+}
+
+func TestLoad_LegacyV0Accepted(t *testing.T) {
+	// Hand-write a dataset with no schema_version field (pre-versioning).
+	path := filepath.Join(t.TempDir(), "legacy.json")
+	body := `{"meta":{"chain":"old","rpc":"http://x","generated_at":"now"},
+	  "range":{"from":0,"to":1},"accounts":[],"transactions":[],"blocks":[]}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := dataset.Load(path)
+	if err != nil {
+		t.Fatalf("Load legacy: %v", err)
+	}
+	if loaded.Meta.SchemaVersion != 0 {
+		t.Errorf("legacy schema_version: got %d want 0", loaded.Meta.SchemaVersion)
+	}
+	if loaded.Meta.Chain != "old" {
+		t.Errorf("chain: got %s", loaded.Meta.Chain)
+	}
+}
+
+func TestLoad_RejectsFutureSchemaVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "future.json")
+	body := fmt.Sprintf(`{"meta":{"schema_version":%d,"chain":"x"}}`, dataset.SchemaVersion+1)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := dataset.Load(path)
+	if err == nil {
+		t.Fatal("expected error for future schema_version")
+	}
+	if !strings.Contains(err.Error(), "schema_version") {
+		t.Errorf("error should mention schema_version, got: %v", err)
 	}
 }

@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Key: Value` and `Key=Value`) and `--user-agent` override.
 - `examples/` directory with a getting-started README and a small batch
   request file.
+- Dataset file format now embeds a `schema_version` field. Files written
+  before this change (no version) are still accepted; files with a version
+  newer than the running binary are rejected with a clear error.
+- Dependabot configuration for Go modules, GitHub Actions, and Docker.
+- CodeQL workflow with the `security-extended` query suite.
+- `SECURITY.md` describing the vulnerability disclosure process.
 
 ### Changed
 - Lowered required Go version from 1.24.13 to **1.23** for broader
@@ -41,7 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced ad-hoc `fmt.Fprintf(os.Stderr, ...)` progress / warning lines in
   the `dataset`, `replay`, `duel`, `diff`, and `benchgen` commands with
   structured `slog` calls.
-- CI matrix now covers only Linux and macOS (Windows dropped).
+- CI matrix now covers only Linux and macOS (Windows dropped). The
+  `golangci-lint` action is pinned to v1.64.5 (built with Go 1.24) so
+  modern toolchains can lint locally without typecheck errors.
 
 ### Removed
 - Unused Blockscout REST API client (`internal/dataset/blockscout.go` and
