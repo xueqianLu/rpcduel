@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- WebSocket transport for JSON-RPC endpoints. Any endpoint URL with a
+  `ws://` or `wss://` scheme transparently uses a single multiplexed
+  WebSocket connection (concurrent requests, response demultiplexed by
+  JSON-RPC id) instead of HTTP. All existing flags (`--retries`,
+  `--insecure`, `--header`, `--user-agent`) apply to the WS handshake.
 - HDR histograms for latency tracking (1µs–60s, 3 sig figs) replacing the
   prior sort-based percentile calculation. New `p999_latency_ms` column in
   the bench text/CSV reports and `Summary.P999` field.

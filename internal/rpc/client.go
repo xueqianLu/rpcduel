@@ -68,10 +68,12 @@ type Options struct {
 	Transport http.RoundTripper
 }
 
-// Client is an Ethereum JSON-RPC HTTP client.
+// Client is an Ethereum JSON-RPC client. The transport is selected from the
+// endpoint URL scheme: http(s) → HTTP transport, ws(s) → WebSocket.
 type Client struct {
 	endpoint string
 	http     *http.Client
+	ws       *wsConn
 	opts     Options
 }
 
@@ -92,6 +94,11 @@ func NewClientWithOptions(endpoint string, opts Options) *Client {
 	if opts.RetryBackoff <= 0 {
 		opts.RetryBackoff = 200 * time.Millisecond
 	}
+	c := &Client{endpoint: endpoint, opts: opts}
+	if IsWebSocketEndpoint(endpoint) {
+		c.ws = newWSConn(endpoint, opts)
+		return c
+	}
 	var rt http.RoundTripper = opts.Transport
 	if rt == nil {
 		t := &http.Transport{
@@ -105,14 +112,11 @@ func NewClientWithOptions(endpoint string, opts Options) *Client {
 		}
 		rt = t
 	}
-	return &Client{
-		endpoint: endpoint,
-		http: &http.Client{
-			Transport: rt,
-			Timeout:   opts.Timeout,
-		},
-		opts: opts,
+	c.http = &http.Client{
+		Transport: rt,
+		Timeout:   opts.Timeout,
 	}
+	return c
 }
 
 // Endpoint returns the configured RPC endpoint URL.
@@ -148,12 +152,25 @@ func (c *Client) Call(ctx context.Context, method string, params []interface{}) 
 			case <-time.After(wait):
 			}
 		}
-		resp, lastErr = c.doOnce(ctx, body)
+		if c.ws != nil {
+			callCtx, cancel := context.WithTimeout(ctx, c.opts.Timeout)
+			resp, lastErr = c.ws.call(callCtx, body, id)
+			cancel()
+		} else {
+			resp, lastErr = c.doOnce(ctx, body)
+		}
 		if !shouldRetry(lastErr) {
 			break
 		}
 	}
 	return resp, time.Since(start), lastErr
+}
+
+// Close releases any underlying connections held by the client.
+func (c *Client) Close() {
+	if c.ws != nil {
+		c.ws.Close()
+	}
 }
 
 func (c *Client) doOnce(ctx context.Context, body []byte) (*Response, error) {
