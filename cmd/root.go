@@ -30,6 +30,7 @@ var (
 	globalRetryBackoff time.Duration
 	globalHeaders      []string
 	globalUserAgent    string
+	globalInsecureTLS  bool
 )
 
 var rootCmd = &cobra.Command{
@@ -66,6 +67,7 @@ func init() {
 	pf.DurationVar(&globalRetryBackoff, "retry-backoff", 200*time.Millisecond, "Base backoff between RPC retries (exponential)")
 	pf.StringArrayVar(&globalHeaders, "header", nil, "Extra HTTP header to send with every RPC request (repeatable, format Key: Value or Key=Value)")
 	pf.StringVar(&globalUserAgent, "user-agent", "", "Override the HTTP User-Agent header sent with every RPC request")
+	pf.BoolVar(&globalInsecureTLS, "insecure", false, "Skip TLS certificate verification on outbound HTTPS requests (development only)")
 
 	rootCmd.AddCommand(callCmd)
 	rootCmd.AddCommand(diffCmd)
@@ -84,11 +86,12 @@ func rpcOptions(timeout time.Duration) rpc.Options {
 		ua = "rpcduel/" + buildVersion
 	}
 	return rpc.Options{
-		Timeout:      timeout,
-		Retries:      globalRetries,
-		RetryBackoff: globalRetryBackoff,
-		Headers:      parseHeaders(globalHeaders),
-		UserAgent:    ua,
+		Timeout:            timeout,
+		Retries:            globalRetries,
+		RetryBackoff:       globalRetryBackoff,
+		Headers:            parseHeaders(globalHeaders),
+		UserAgent:          ua,
+		InsecureSkipVerify: globalInsecureTLS,
 	}
 }
 

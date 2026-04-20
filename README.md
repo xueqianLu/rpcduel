@@ -92,6 +92,7 @@ These flags apply to every subcommand:
 | `--retry-backoff` | `200ms` | Initial exponential backoff between retries. |
 | `--header` | (none) | Extra HTTP header sent with every RPC request. May be repeated. Accepts `Key: Value` or `Key=Value`. |
 | `--user-agent` | `rpcduel/<version>` | Override the `User-Agent` header. |
+| `--insecure` | `false` | Skip TLS certificate verification on outbound HTTPS requests. **Development only** — never use against production endpoints. |
 
 Examples live in [`examples/`](./examples/README.md).
 

@@ -45,6 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are valid).
 - `make ci` convenience target runs `vet`, `lint`, and `race` together,
   mirroring the GitHub Actions CI job.
+- `Options.InsecureSkipVerify` (CLI: `--insecure`) to skip TLS certificate
+  verification for development against self-signed nodes.
+- `Options.Transport` lets callers inject a custom `http.RoundTripper`
+  (mainly useful for tests).
+- `.pre-commit-config.yaml` with `gofmt`, `go vet`, `go mod tidy`, and
+  `golangci-lint` hooks.
 
 ### Changed
 - Lowered required Go version from 1.24.13 to **1.23** for broader

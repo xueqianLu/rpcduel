@@ -4,6 +4,7 @@ package rpc
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,6 +58,14 @@ type Options struct {
 	// UserAgent overrides the default User-Agent header. If empty, the
 	// default Go HTTP client User-Agent is sent.
 	UserAgent string
+	// InsecureSkipVerify disables TLS certificate verification on outbound
+	// HTTPS requests. Useful for development against self-signed nodes;
+	// must not be enabled in production.
+	InsecureSkipVerify bool
+	// Transport, when non-nil, replaces the default http.Transport. This
+	// is mainly useful for tests; setting it disables the connection-pool
+	// and TLS knobs above.
+	Transport http.RoundTripper
 }
 
 // Client is an Ethereum JSON-RPC HTTP client.
@@ -83,16 +92,23 @@ func NewClientWithOptions(endpoint string, opts Options) *Client {
 	if opts.RetryBackoff <= 0 {
 		opts.RetryBackoff = 200 * time.Millisecond
 	}
-	transport := &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 100,
-		IdleConnTimeout:     90 * time.Second,
-		DisableCompression:  false,
+	var rt http.RoundTripper = opts.Transport
+	if rt == nil {
+		t := &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 100,
+			IdleConnTimeout:     90 * time.Second,
+			DisableCompression:  false,
+		}
+		if opts.InsecureSkipVerify {
+			t.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // opt-in dev flag
+		}
+		rt = t
 	}
 	return &Client{
 		endpoint: endpoint,
 		http: &http.Client{
-			Transport: transport,
+			Transport: rt,
 			Timeout:   opts.Timeout,
 		},
 		opts: opts,

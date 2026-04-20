@@ -2,8 +2,10 @@ package rpc_test
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -124,3 +126,31 @@ func TestClient_Endpoint(t *testing.T) {
 		t.Fatalf("Endpoint=%q", got)
 	}
 }
+
+func TestClient_CustomTransportIsUsed(t *testing.T) {
+	var seen int32
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		atomic.AddInt32(&seen, 1)
+		body := `{"jsonrpc":"2.0","id":1,"result":"0x1"}`
+		return &http.Response{
+			StatusCode: 200,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    r,
+		}, nil
+	})
+	c := rpc.NewClientWithOptions("http://nowhere.invalid", rpc.Options{
+		Timeout:   time.Second,
+		Transport: rt,
+	})
+	if _, _, err := c.Call(context.Background(), "eth_blockNumber", nil); err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	if atomic.LoadInt32(&seen) != 1 {
+		t.Fatalf("custom transport was not used (seen=%d)", seen)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
