@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -109,7 +110,7 @@ func runDuel(cmd *cobra.Command, args []string) error {
 		rJSON := runner.ResultToJSON(pair.Right.Response)
 		diffs, err := diff.Compare(lJSON, rJSON, opts)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: compare error: %v\n", err)
+			slog.Warn("compare error", "err", err)
 			continue
 		}
 		allDiffs = append(allDiffs, diffs...)

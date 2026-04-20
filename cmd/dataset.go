@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -57,7 +58,7 @@ func runDataset(cmd *cobra.Command, args []string) error {
 	}
 
 	ctx := context.Background()
-	scanner := dataset.NewChainScanner(datasetRPC)
+	scanner := dataset.NewChainScannerWithOptions(datasetRPC, rpcOptions(30*time.Second))
 
 	// Resolve the upper bound of the scan range.
 	toBlock := datasetToBlock
@@ -67,7 +68,7 @@ func runDataset(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("get latest block: %w", err)
 		}
 		toBlock = latest
-		fmt.Fprintf(os.Stderr, "Latest block: %d\n", toBlock)
+		slog.Info("resolved chain head", "latest_block", toBlock)
 	}
 
 	fromBlock := datasetFromBlock
@@ -91,20 +92,21 @@ func runDataset(cmd *cobra.Command, args []string) error {
 		},
 	}
 
-	fmt.Fprintf(os.Stderr, "Scanning blocks %d → %d (high to low) via %s\n", toBlock, fromBlock, datasetRPC)
-	fmt.Fprintf(os.Stderr, "  collecting up to %d accounts, %d transactions, %d blocks\n",
-		datasetAccounts, datasetTxs, datasetBlocks)
+	slog.Info("scanning blocks",
+		"from", fromBlock, "to", toBlock,
+		"max_accounts", datasetAccounts, "max_txs", datasetTxs, "max_blocks", datasetBlocks,
+		"rpc", datasetRPC)
 
 	accounts, txs, blocks, err := scanner.Scan(ctx, fromBlock, toBlock, datasetAccounts, datasetTxs, datasetBlocks, datasetMaxTxPerAccount, datasetConcurrency)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: scan incomplete: %v\n", err)
+		slog.Warn("scan incomplete", "err", err)
 	}
 	ds.Accounts = accounts
 	ds.Transactions = txs
 	ds.Blocks = blocks
 
-	fmt.Fprintf(os.Stderr, "  collected %d accounts, %d transactions, %d blocks\n",
-		len(ds.Accounts), len(ds.Transactions), len(ds.Blocks))
+	slog.Info("scan complete",
+		"accounts", len(ds.Accounts), "transactions", len(ds.Transactions), "blocks", len(ds.Blocks))
 
 	// Persist
 	if err := dataset.Save(datasetOut, ds); err != nil {

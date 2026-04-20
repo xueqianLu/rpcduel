@@ -1,0 +1,6 @@
+[
+  { "method": "eth_blockNumber", "params": [] },
+  { "method": "eth_chainId",     "params": [] },
+  { "method": "eth_gasPrice",    "params": [] },
+  { "method": "eth_getBlockByNumber", "params": ["latest", false] }
+]

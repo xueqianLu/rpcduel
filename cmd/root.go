@@ -3,8 +3,13 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/xueqianLu/rpcduel/internal/clilog"
+	"github.com/xueqianLu/rpcduel/internal/rpc"
 )
 
 // Build info populated by main via SetBuildInfo.
@@ -22,18 +27,32 @@ func SetBuildInfo(version, commit, date string) {
 	rootCmd.Version = fmt.Sprintf("%s (commit %s, built %s)", version, commit, date)
 }
 
+// Global flags shared by all subcommands. Wired up in init().
+var (
+	globalLogLevel     string
+	globalLogFormat    string
+	globalRetries      int
+	globalRetryBackoff time.Duration
+	globalHeaders      []string
+	globalUserAgent    string
+)
+
 var rootCmd = &cobra.Command{
 	Use:     "rpcduel",
 	Version: "dev",
 	Short:   "A CLI tool for comparing and benchmarking Ethereum JSON-RPC endpoints",
 	Long: `rpcduel is a high-performance CLI tool for:
-	- Calling Ethereum JSON-RPC methods directly (call)
+  - Calling Ethereum JSON-RPC methods directly (call)
   - Comparing responses from multiple Ethereum JSON-RPC nodes (diff)
   - Benchmarking RPC node performance (bench)
   - Running concurrent diff+benchmark tests (duel)
   - Collecting on-chain test datasets by scanning a block range via RPC (dataset)
-			- Replaying dataset-backed consistency checks across nodes (replay)
+  - Replaying dataset-backed consistency checks across nodes (replay)
   - Generating benchmark scenario files from datasets (benchgen)`,
+	SilenceUsage: true,
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		return clilog.Setup(globalLogLevel, globalLogFormat)
+	},
 }
 
 // Execute runs the root command.
@@ -45,6 +64,14 @@ func Execute() {
 }
 
 func init() {
+	pf := rootCmd.PersistentFlags()
+	pf.StringVar(&globalLogLevel, "log-level", "info", "Log level (debug|info|warn|error)")
+	pf.StringVar(&globalLogFormat, "log-format", "text", "Log format (text|json)")
+	pf.IntVar(&globalRetries, "retries", 0, "Maximum number of RPC retries on transient errors (5xx, 429, network)")
+	pf.DurationVar(&globalRetryBackoff, "retry-backoff", 200*time.Millisecond, "Base backoff between RPC retries (exponential)")
+	pf.StringArrayVar(&globalHeaders, "header", nil, "Extra HTTP header to send with every RPC request (repeatable, format Key: Value or Key=Value)")
+	pf.StringVar(&globalUserAgent, "user-agent", "", "Override the HTTP User-Agent header sent with every RPC request")
+
 	rootCmd.AddCommand(callCmd)
 	rootCmd.AddCommand(diffCmd)
 	rootCmd.AddCommand(benchCmd)
@@ -52,4 +79,49 @@ func init() {
 	rootCmd.AddCommand(datasetCmd)
 	rootCmd.AddCommand(diffTestCmd)
 	rootCmd.AddCommand(benchgenCmd)
+}
+
+// rpcOptions returns the *rpc.Options* derived from global flags, with the
+// supplied per-command timeout applied.
+func rpcOptions(timeout time.Duration) rpc.Options {
+	return rpc.Options{
+		Timeout:      timeout,
+		Retries:      globalRetries,
+		RetryBackoff: globalRetryBackoff,
+		Headers:      parseHeaders(globalHeaders),
+		UserAgent:    globalUserAgent,
+	}
+}
+
+// newRPCClient is a convenience wrapper that builds an rpc.Client honouring
+// global flags.
+func newRPCClient(endpoint string, timeout time.Duration) *rpc.Client {
+	return rpc.NewClientWithOptions(endpoint, rpcOptions(timeout))
+}
+
+func parseHeaders(in []string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for _, h := range in {
+		if h == "" {
+			continue
+		}
+		// Accept both "Key: Value" and "Key=Value".
+		var k, v string
+		if idx := strings.Index(h, ":"); idx > 0 {
+			k = strings.TrimSpace(h[:idx])
+			v = strings.TrimSpace(h[idx+1:])
+		} else if idx := strings.Index(h, "="); idx > 0 {
+			k = strings.TrimSpace(h[:idx])
+			v = strings.TrimSpace(h[idx+1:])
+		} else {
+			continue
+		}
+		if k != "" {
+			out[k] = v
+		}
+	}
+	return out
 }

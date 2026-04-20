@@ -55,7 +55,7 @@ func runCall(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	client := rpc.NewClient(callRPC, callTimeout)
+	client := newRPCClient(callRPC, callTimeout)
 	resp, latency, err := client.Call(context.Background(), method, params)
 
 	rep := report.CallReport{

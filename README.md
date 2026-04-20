@@ -80,6 +80,21 @@ Requires **Go 1.23+**.
 
 ## Commands
 
+### Global flags
+
+These flags apply to every subcommand:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error`. |
+| `--log-format` | `text` | Log format: `text` or `json` (structured output via `slog`). |
+| `--retries` | `0` | Number of retries on network / 5xx / 408 / 429 failures. JSON-RPC application errors are not retried. |
+| `--retry-backoff` | `200ms` | Initial exponential backoff between retries. |
+| `--header` | (none) | Extra HTTP header sent with every RPC request. May be repeated. Accepts `Key: Value` or `Key=Value`. |
+| `--user-agent` | `rpcduel/<version>` | Override the `User-Agent` header. |
+
+Examples live in [`examples/`](./examples/README.md).
+
 ### `call`
 
 Call any JSON-RPC method directly against a single endpoint. This is the fastest way to replace one-off `curl` commands when debugging or exploring node behaviour.

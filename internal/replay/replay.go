@@ -103,6 +103,9 @@ type Config struct {
 	TraceTransaction bool
 	TraceBlock       bool
 	Only             map[string]bool
+	// RPCOptions controls the underlying RPC client behaviour (timeout,
+	// retries, headers, ...). When zero-valued, sensible defaults are used.
+	RPCOptions rpc.Options
 }
 
 // Run executes the full replay suite against ds using concurrency goroutines.
@@ -115,8 +118,12 @@ func Run(ctx context.Context, ds *dataset.Dataset, cfg Config, concurrency int, 
 	}
 
 	const requestTimeout = 30 * time.Second
-	cA := rpc.NewClient(cfg.EndpointA, requestTimeout)
-	cB := rpc.NewClient(cfg.EndpointB, requestTimeout)
+	rpcOpts := cfg.RPCOptions
+	if rpcOpts.Timeout <= 0 {
+		rpcOpts.Timeout = requestTimeout
+	}
+	cA := rpc.NewClientWithOptions(cfg.EndpointA, rpcOpts)
+	cB := rpc.NewClientWithOptions(cfg.EndpointB, rpcOpts)
 
 	result := &Result{
 		AccountsTested:     0,

@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - GitHub Actions CI workflow running `go vet`, `go build`, `go test -race`, and
-  `golangci-lint` across Linux/macOS/Windows on Go 1.23 and 1.24.
+  `golangci-lint` across Linux and macOS on Go 1.23 and 1.24.
 - `golangci-lint` configuration (`.golangci.yml`).
 - GoReleaser configuration with cross-platform binaries (Linux/macOS/Windows ×
   amd64/arm64) and multi-arch container images published to
@@ -21,12 +21,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `CONTRIBUTING.md` and GitHub issue / pull-request templates.
 - `--version` flag printing version, commit, and build date (set via
   `-ldflags` at build time).
+- Structured logging via `log/slog` with new global flags `--log-level` and
+  `--log-format` (`text`/`json`).
+- HTTP-level retries with exponential backoff for the JSON-RPC client.
+  Configurable via `--retries` and `--retry-backoff`. Retries cover network
+  errors, HTTP 408/429, and 5xx responses; JSON-RPC application errors are
+  still surfaced immediately.
+- Custom HTTP headers via repeatable `--header` flag (accepts both
+  `Key: Value` and `Key=Value`) and `--user-agent` override.
+- `examples/` directory with a getting-started README and a small batch
+  request file.
 
 ### Changed
 - Lowered required Go version from 1.24.13 to **1.23** for broader
   compatibility.
-- README: added build/test/release badges and updated install instructions to
-  cover prebuilt binaries and Docker images.
+- README: added build/test/release badges, updated install instructions to
+  cover prebuilt binaries and Docker images, and documented the new global
+  flags.
+- Replaced ad-hoc `fmt.Fprintf(os.Stderr, ...)` progress / warning lines in
+  the `dataset`, `replay`, `duel`, `diff`, and `benchgen` commands with
+  structured `slog` calls.
+- CI matrix now covers only Linux and macOS (Windows dropped).
 
 ### Removed
 - Unused Blockscout REST API client (`internal/dataset/blockscout.go` and

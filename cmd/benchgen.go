@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"os"
 	"sort"
@@ -93,7 +94,7 @@ func runBenchgen(_ *cobra.Command, _ []string) error {
 		if err := benchgen.SaveBenchFile(benchgenOut, bf); err != nil {
 			return fmt.Errorf("write bench file: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "Bench scenario file written to %s\n", benchgenOut)
+		slog.Info("bench scenario file written", "path", benchgenOut)
 	}
 
 	if len(benchgenRPCs) == 0 {
@@ -143,8 +144,11 @@ func runBenchgen(_ *cobra.Command, _ []string) error {
 	if benchgenDuration > 0 {
 		totalRequests = 0
 	}
-	_, _ = fmt.Fprintf(os.Stderr, "Running benchgen: scenarios=%d requests=%d concurrency=%d endpoints=%d\n",
-		totalScenarios, totalRequests, benchgenConcurrency, len(benchgenRPCs))
+	slog.Info("running benchgen",
+		"scenarios", totalScenarios,
+		"requests", totalRequests,
+		"concurrency", benchgenConcurrency,
+		"endpoints", len(benchgenRPCs))
 
 	// Per-(endpoint, scenario) metrics map.
 	// The key is "endpoint\x00scenario"; the NUL byte is used as a separator
@@ -208,7 +212,7 @@ func runBenchgen(_ *cobra.Command, _ []string) error {
 		if err := report.WriteBenchCSV(f, summaries); err != nil {
 			return fmt.Errorf("write CSV report: %w", err)
 		}
-		_, _ = fmt.Fprintf(os.Stderr, "CSV report written to %s\n", benchgenCSV)
+		slog.Info("CSV report written", "path", benchgenCSV)
 	}
 	return nil
 }

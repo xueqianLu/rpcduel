@@ -21,10 +21,22 @@ type ChainScanner struct {
 	client *rpc.Client
 }
 
-// NewChainScanner returns a ChainScanner backed by the given RPC endpoint.
+// NewChainScanner returns a ChainScanner backed by the given RPC endpoint
+// using default request options (30s timeout, no retries).
 func NewChainScanner(endpoint string) *ChainScanner {
 	return &ChainScanner{
 		client: rpc.NewClient(endpoint, 30*time.Second),
+	}
+}
+
+// NewChainScannerWithOptions returns a ChainScanner backed by the given RPC
+// endpoint using the supplied client options (allows retries, headers, etc.).
+func NewChainScannerWithOptions(endpoint string, opts rpc.Options) *ChainScanner {
+	if opts.Timeout <= 0 {
+		opts.Timeout = 30 * time.Second
+	}
+	return &ChainScanner{
+		client: rpc.NewClientWithOptions(endpoint, opts),
 	}
 }
 

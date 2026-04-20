@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -82,8 +83,8 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	for _, req := range requests {
 		for i := 0; i < diffRepeat; i++ {
 			total++
-			cA := rpc.NewClient(epA, diffTimeout)
-			cB := rpc.NewClient(epB, diffTimeout)
+			cA := newRPCClient(epA, diffTimeout)
+			cB := newRPCClient(epB, diffTimeout)
 
 			respA, _, errA := cA.Call(ctx, req.Method, req.Params)
 			respB, _, errB := cB.Call(ctx, req.Method, req.Params)
@@ -104,7 +105,7 @@ func runDiff(cmd *cobra.Command, args []string) error {
 
 			diffs, err := diff.Compare(respA.Result, respB.Result, opts)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: compare error: %v\n", err)
+				slog.Warn("compare error", "err", err)
 				continue
 			}
 			allDiffs = append(allDiffs, diffs...)

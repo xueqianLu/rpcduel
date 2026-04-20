@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"time"
 
@@ -80,8 +81,10 @@ func runDiffTest(cmd *cobra.Command, args []string) error {
 		opts.IgnoreFields[f] = true
 	}
 
-	fmt.Fprintf(os.Stderr, "Running replay on dataset (accounts=%d txs=%d blocks=%d)...\n",
-		len(ds.Accounts), len(ds.Transactions), len(ds.Blocks))
+	slog.Info("running replay",
+		"accounts", len(ds.Accounts),
+		"transactions", len(ds.Transactions),
+		"blocks", len(ds.Blocks))
 
 	ctx := context.Background()
 	result, err := replay.Run(ctx, ds, replay.Config{
@@ -92,6 +95,7 @@ func runDiffTest(cmd *cobra.Command, args []string) error {
 		TraceTransaction: diffTestTraceTransaction,
 		TraceBlock:       diffTestTraceBlock,
 		Only:             only,
+		RPCOptions:       rpcOptions(diffTestTimeout),
 	}, diffTestConcurrency, os.Stderr)
 	if err != nil {
 		return fmt.Errorf("replay: %w", err)
@@ -108,7 +112,7 @@ func runDiffTest(cmd *cobra.Command, args []string) error {
 		}
 		defer f.Close()
 		printResult(f, result, diffTestOutput)
-		fmt.Fprintf(os.Stderr, "Report written to %s\n", diffTestReport)
+		slog.Info("report written", "path", diffTestReport)
 	}
 
 	// Write CSV diff report if requested.
@@ -121,7 +125,7 @@ func runDiffTest(cmd *cobra.Command, args []string) error {
 		if err := replay.WriteResultCSV(f, result); err != nil {
 			return fmt.Errorf("write CSV report: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "CSV report written to %s\n", diffTestCSV)
+		slog.Info("CSV report written", "path", diffTestCSV)
 	}
 	return nil
 }
