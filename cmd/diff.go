@@ -53,6 +53,9 @@ func init() {
 }
 
 func runDiff(cmd *cobra.Command, args []string) error {
+	if err := validateOutputFormat(diffOutput); err != nil {
+		return err
+	}
 	if len(diffRPCs) < 2 {
 		return fmt.Errorf("at least 2 --rpc endpoints are required")
 	}

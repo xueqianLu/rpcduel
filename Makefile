@@ -4,7 +4,7 @@ GO          ?= go
 GOFLAGS     ?=
 LDFLAGS     ?= -s -w -X main.version=$(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
-.PHONY: all build install test race cover vet lint tidy fmt clean release-snapshot docker
+.PHONY: all build install test race cover vet lint tidy fmt clean release-snapshot docker ci
 
 all: build
 
@@ -48,3 +48,6 @@ release-snapshot:
 
 docker:
 	docker build -t $(BINARY):dev .
+
+ci: vet lint race
+	@echo "ci targets passed"

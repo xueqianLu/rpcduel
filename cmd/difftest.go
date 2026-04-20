@@ -60,6 +60,9 @@ func init() {
 }
 
 func runDiffTest(cmd *cobra.Command, args []string) error {
+	if err := validateOutputFormat(diffTestOutput); err != nil {
+		return err
+	}
 	if len(diffTestRPCs) != 2 {
 		return fmt.Errorf("exactly 2 --rpc endpoints are required")
 	}

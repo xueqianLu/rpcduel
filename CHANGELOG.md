@@ -37,6 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dependabot configuration for Go modules, GitHub Actions, and Docker.
 - CodeQL workflow with the `security-extended` query suite.
 - `SECURITY.md` describing the vulnerability disclosure process.
+- Release workflow gains a `validate` job that runs `goreleaser check` and
+  a `workflow_dispatch` trigger that produces a snapshot build with
+  artifacts uploaded for inspection (no publish, no tag required).
+- All commands that accept `--output` now validate the value up front and
+  return a clear error for unsupported formats (only `text` and `json`
+  are valid).
+- `make ci` convenience target runs `vet`, `lint`, and `race` together,
+  mirroring the GitHub Actions CI job.
 
 ### Changed
 - Lowered required Go version from 1.24.13 to **1.23** for broader

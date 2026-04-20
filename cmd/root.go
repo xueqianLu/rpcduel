@@ -98,6 +98,19 @@ func newRPCClient(endpoint string, timeout time.Duration) *rpc.Client {
 	return rpc.NewClientWithOptions(endpoint, rpcOptions(timeout))
 }
 
+// validateOutputFormat returns an error if format is not one of "text" or
+// "json". Used by every subcommand that exposes an --output flag so we
+// surface bad values early with a helpful message instead of falling
+// through to a silent default.
+func validateOutputFormat(format string) error {
+	switch format {
+	case "text", "json":
+		return nil
+	default:
+		return fmt.Errorf("invalid --output %q: must be one of text, json", format)
+	}
+}
+
 func parseHeaders(in []string) map[string]string {
 	if len(in) == 0 {
 		return nil

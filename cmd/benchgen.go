@@ -68,6 +68,9 @@ func init() {
 }
 
 func runBenchgen(_ *cobra.Command, _ []string) error {
+	if err := validateOutputFormat(benchgenOutput); err != nil {
+		return err
+	}
 	if len(benchgenRPCs) == 0 && benchgenOut == "" {
 		return fmt.Errorf("at least one --rpc endpoint or --out is required")
 	}

@@ -50,6 +50,9 @@ func init() {
 }
 
 func runDuel(cmd *cobra.Command, args []string) error {
+	if err := validateOutputFormat(duelOutput); err != nil {
+		return err
+	}
 	if len(duelRPCs) != 2 {
 		return fmt.Errorf("exactly 2 --rpc endpoints are required")
 	}

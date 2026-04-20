@@ -41,6 +41,9 @@ func init() {
 }
 
 func runCall(cmd *cobra.Command, args []string) error {
+	if err := validateOutputFormat(callOutput); err != nil {
+		return err
+	}
 	if callRPC == "" {
 		return fmt.Errorf("--rpc is required")
 	}

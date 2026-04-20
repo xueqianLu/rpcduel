@@ -51,6 +51,9 @@ func init() {
 }
 
 func runBench(cmd *cobra.Command, args []string) error {
+	if err := validateOutputFormat(benchOutput); err != nil {
+		return err
+	}
 	if len(benchRPCs) == 0 {
 		return fmt.Errorf("at least one --rpc endpoint is required")
 	}
