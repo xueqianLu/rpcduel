@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -31,11 +32,12 @@ var (
 	datasetOut             string
 	datasetChain           string
 	datasetConcurrency     int
+	datasetAppend          bool
 )
 
 func init() {
 	datasetCmd.Flags().StringVar(&datasetRPC, "rpc", "", "Ethereum JSON-RPC endpoint URL (required)")
-	datasetCmd.Flags().Int64Var(&datasetFromBlock, "from-block", 0, "Start block, inclusive (0 = chain head minus --blocks range)")
+	datasetCmd.Flags().Int64Var(&datasetFromBlock, "from-block", 0, "Start block, inclusive (0 = chain head minus --blocks range, or last-collected+1 in --append mode)")
 	datasetCmd.Flags().Int64Var(&datasetToBlock, "to-block", 0, "End block, inclusive (0 = latest)")
 	datasetCmd.Flags().IntVar(&datasetAccounts, "accounts", 1000, "Maximum number of accounts to collect")
 	datasetCmd.Flags().IntVar(&datasetTxs, "txs", 1000, "Maximum number of transactions to collect")
@@ -45,6 +47,7 @@ func init() {
 	datasetCmd.Flags().StringVar(&datasetOut, "out", "dataset.json", "Output file path")
 	datasetCmd.Flags().StringVar(&datasetChain, "chain", "ethereum", "Chain name recorded in the dataset")
 	datasetCmd.Flags().IntVar(&datasetConcurrency, "concurrency", 4, "Number of goroutines used to fetch blocks from the RPC endpoint")
+	datasetCmd.Flags().BoolVar(&datasetAppend, "append", false, "Append to an existing --out dataset: scan only the delta range (last-collected+1 to head by default) and merge results")
 }
 
 // defaultFromBlockMultiplier is used when --from-block is not specified: we look
@@ -60,6 +63,25 @@ func runDataset(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	scanner := dataset.NewChainScannerWithOptions(datasetRPC, rpcOptions(30*time.Second))
 
+	// Append mode: load any existing dataset to seed merge + default fromBlock.
+	var existing *dataset.Dataset
+	if datasetAppend {
+		if loaded, err := dataset.Load(datasetOut); err == nil {
+			existing = loaded
+			slog.Info("append mode: loaded existing dataset",
+				"file", datasetOut,
+				"accounts", len(existing.Accounts),
+				"transactions", len(existing.Transactions),
+				"blocks", len(existing.Blocks),
+				"prev_range_from", existing.Range.From,
+				"prev_range_to", existing.Range.To)
+		} else if os.IsNotExist(err) || errors.Is(err, os.ErrNotExist) {
+			slog.Info("append mode: no existing dataset, starting fresh", "file", datasetOut)
+		} else {
+			return fmt.Errorf("append: load existing dataset: %w", err)
+		}
+	}
+
 	// Resolve the upper bound of the scan range.
 	toBlock := datasetToBlock
 	if toBlock == 0 {
@@ -73,10 +95,23 @@ func runDataset(cmd *cobra.Command, args []string) error {
 
 	fromBlock := datasetFromBlock
 	if fromBlock == 0 {
-		// Default: scan backward from toBlock far enough to find data.
-		fromBlock = toBlock - int64(datasetBlocks)*defaultFromBlockMultiplier
-		if fromBlock < 0 {
-			fromBlock = 0
+		switch {
+		case existing != nil && existing.Range.To > 0:
+			fromBlock = existing.Range.To + 1
+			if fromBlock > toBlock {
+				slog.Info("append mode: nothing new to scan; re-saving existing dataset",
+					"prev_to", existing.Range.To, "head", toBlock)
+				if err := dataset.Save(datasetOut, existing); err != nil {
+					return fmt.Errorf("save dataset: %w", err)
+				}
+				return nil
+			}
+		default:
+			// Default: scan backward from toBlock far enough to find data.
+			fromBlock = toBlock - int64(datasetBlocks)*defaultFromBlockMultiplier
+			if fromBlock < 0 {
+				fromBlock = 0
+			}
 		}
 	}
 
@@ -95,7 +130,7 @@ func runDataset(cmd *cobra.Command, args []string) error {
 	slog.Info("scanning blocks",
 		"from", fromBlock, "to", toBlock,
 		"max_accounts", datasetAccounts, "max_txs", datasetTxs, "max_blocks", datasetBlocks,
-		"rpc", datasetRPC)
+		"append", datasetAppend, "rpc", datasetRPC)
 
 	accounts, txs, blocks, err := scanner.Scan(ctx, fromBlock, toBlock, datasetAccounts, datasetTxs, datasetBlocks, datasetMaxTxPerAccount, datasetConcurrency)
 	if err != nil {
@@ -106,7 +141,13 @@ func runDataset(cmd *cobra.Command, args []string) error {
 	ds.Blocks = blocks
 
 	slog.Info("scan complete",
-		"accounts", len(ds.Accounts), "transactions", len(ds.Transactions), "blocks", len(ds.Blocks))
+		"new_accounts", len(ds.Accounts), "new_transactions", len(ds.Transactions), "new_blocks", len(ds.Blocks))
+
+	if existing != nil {
+		ds = dataset.Merge(existing, ds, datasetAccounts, datasetTxs, datasetBlocks, datasetMaxTxPerAccount)
+		slog.Info("merged with existing dataset",
+			"accounts", len(ds.Accounts), "transactions", len(ds.Transactions), "blocks", len(ds.Blocks))
+	}
 
 	// Persist
 	if err := dataset.Save(datasetOut, ds); err != nil {

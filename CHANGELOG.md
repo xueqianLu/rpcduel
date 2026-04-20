@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `dataset --append` for incremental dataset collection. When the
+  destination file already exists, the scanner defaults the start block
+  to `existingRange.To + 1`, fetches only the delta range, and merges
+  the new accounts/transactions/blocks into the existing dataset
+  (deduplicated by hash / address / number, with caps re-applied). The
+  result preserves the union block range and keeps the largest reported
+  per-account transaction count.
 - Unix-domain-socket IPC transport. Endpoints with the `unix://` URL
   scheme (e.g. `unix:///tmp/geth.ipc`) connect directly to a node's IPC
   socket using the same multiplexed connection pattern as the WebSocket
