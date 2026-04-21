@@ -1,3 +1,6 @@
+// Copyright 2026 The rpcduel Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package config loads rpcduel.yaml configuration files.
 //
 // The config file lets users describe endpoints, command defaults,

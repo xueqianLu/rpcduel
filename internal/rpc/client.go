@@ -1,3 +1,6 @@
+// Copyright 2026 The rpcduel Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package rpc provides a JSON-RPC HTTP client for Ethereum nodes.
 package rpc
 

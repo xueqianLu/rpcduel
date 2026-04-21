@@ -1,3 +1,6 @@
+// Copyright 2026 The rpcduel Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package dataset – ChainScanner fetches chain data by iterating blocks
 // via the Ethereum JSON-RPC API from a given high block down to a low block.
 package dataset

@@ -1,3 +1,6 @@
+// Copyright 2026 The rpcduel Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package thresholds evaluates SLO breaches against rpcduel command
 // reports and returns human-readable failure descriptions.
 //

@@ -1,3 +1,6 @@
+// Copyright 2026 The rpcduel Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package replay implements the replay logic: it loads a dataset, generates
 // RPC calls per entity (account / transaction / block), runs them against two
 // endpoints concurrently, and categorizes the differences.

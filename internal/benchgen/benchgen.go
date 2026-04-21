@@ -1,3 +1,6 @@
+// Copyright 2026 The rpcduel Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package benchgen generates benchmark scenario files from a dataset.
 // The output JSON can be fed directly into `rpcduel bench --input`.
 package benchgen

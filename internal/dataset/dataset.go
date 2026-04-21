@@ -1,3 +1,6 @@
+// Copyright 2026 The rpcduel Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package dataset defines the shared data structures for rpcduel test datasets
 // and provides helpers for persisting them to / loading them from disk.
 package dataset

@@ -1,3 +1,6 @@
+// Copyright 2026 The rpcduel Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package metrics exposes Prometheus metrics for rpcduel benchmarks.
 //
 // All collectors are registered on a package-private registry that is also

@@ -1,3 +1,6 @@
+// Copyright 2026 The rpcduel Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package clilog configures the process-wide slog logger for rpcduel commands.
 package clilog
 

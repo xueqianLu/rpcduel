@@ -75,6 +75,27 @@ This makes the auto-generated changelog readable.
 3. Run `make test lint` locally and make sure CI is green.
 4. Keep the PR focused — split unrelated changes into separate PRs.
 5. Update `CHANGELOG.md` under the `Unreleased` section.
+6. New `.go` files must start with the standard SPDX header — see
+   [License headers](#license-headers) below.
+
+## License headers
+
+rpcduel is released under Apache License 2.0. Every Go source file
+must begin with the following two-line SPDX header so the license is
+discoverable at the file level:
+
+```go
+// Copyright 2026 The rpcduel Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package …
+```
+
+By submitting a contribution you agree it is licensed under
+Apache-2.0 and that your name may be added to the `AUTHORS` file.
+The collective copyright holder is "The rpcduel Authors", defined in
+the [`AUTHORS`](./AUTHORS) file at the repo root — please feel free
+to add yourself in your first PR.
 
 ## Reporting issues
 

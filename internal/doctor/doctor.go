@@ -1,3 +1,6 @@
+// Copyright 2026 The rpcduel Authors
+// SPDX-License-Identifier: Apache-2.0
+
 // Package doctor probes JSON-RPC endpoints for connectivity, identity,
 // sync state, and method capability. The Run helper returns a
 // structured Report that can be rendered as either a human-readable

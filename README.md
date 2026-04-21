@@ -4,7 +4,7 @@
 [![Release](https://github.com/xueqianLu/rpcduel/actions/workflows/release.yml/badge.svg)](https://github.com/xueqianLu/rpcduel/actions/workflows/release.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/xueqianLu/rpcduel.svg)](https://pkg.go.dev/github.com/xueqianLu/rpcduel)
 [![Go Report Card](https://goreportcard.com/badge/github.com/xueqianLu/rpcduel)](https://goreportcard.com/report/github.com/xueqianLu/rpcduel)
-[![License: MIT](https://img.shields.io/github/license/xueqianLu/rpcduel)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/github/license/xueqianLu/rpcduel)](LICENSE)
 [![Latest Release](https://img.shields.io/github/v/release/xueqianLu/rpcduel?sort=semver)](https://github.com/xueqianLu/rpcduel/releases)
 
 **rpcduel** is a high-performance CLI for comparing and benchmarking
@@ -133,4 +133,4 @@ requests, and PRs are all appreciated.
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+Apache License 2.0 — see [LICENSE](./LICENSE) and [AUTHORS](./AUTHORS).
