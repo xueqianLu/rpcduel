@@ -1,0 +1,109 @@
+# Example GitHub Actions workflow that uses rpcduel as a JSON-RPC
+# health and regression gate in CI.
+#
+# What it does:
+#   1. Installs rpcduel from a pinned release.
+#   2. Runs `rpcduel doctor` against two endpoints — fails the job
+#      immediately if either endpoint is unreachable.
+#   3. Runs `rpcduel replay` with SLO thresholds and a JUnit report.
+#      If the mismatch rate exceeds the limit, rpcduel exits 2 and the
+#      step fails.
+#   4. Uploads the JUnit XML + HTML report as artifacts, and surfaces
+#      test results via the `dorny/test-reporter` action so reviewers
+#      see failures inline on the PR check.
+#
+# Secrets you'll want to set on the repo:
+#   ENDPOINT_A, ENDPOINT_B                — RPC URLs
+#   ERIGON_TOKEN (optional)               — if your config uses it
+#
+# Copy to .github/workflows/rpcduel.yml and edit the endpoints / thresholds.
+
+name: rpcduel
+
+on:
+  pull_request:
+  schedule:
+    - cron: "0 */6 * * *" # every 6h
+  workflow_dispatch:
+
+jobs:
+  rpcduel:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write # for test-reporter
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rpcduel
+        run: |
+          VERSION=0.2.0
+          curl -sSL -o /tmp/rpcduel.tar.gz \
+            "https://github.com/xueqianLu/rpcduel/releases/download/v${VERSION}/rpcduel_${VERSION}_linux_amd64.tar.gz"
+          tar -xzf /tmp/rpcduel.tar.gz -C /tmp
+          sudo install -m 0755 /tmp/rpcduel /usr/local/bin/rpcduel
+          rpcduel --version
+
+      - name: Probe endpoints
+        env:
+          ENDPOINT_A: ${{ secrets.ENDPOINT_A }}
+          ENDPOINT_B: ${{ secrets.ENDPOINT_B }}
+        run: |
+          rpcduel doctor \
+            --rpc "$ENDPOINT_A" \
+            --rpc "$ENDPOINT_B" \
+            --fail-on unreachable \
+            --output text
+
+      - name: Run diff regression
+        env:
+          ENDPOINT_A: ${{ secrets.ENDPOINT_A }}
+          ENDPOINT_B: ${{ secrets.ENDPOINT_B }}
+        run: |
+          rpcduel diff \
+            --rpc "$ENDPOINT_A" \
+            --rpc "$ENDPOINT_B" \
+            --method eth_getBlockByNumber \
+            --params '["latest", false]' \
+            --ignore-field hash \
+            --repeat 20 \
+            --max-diff-rate 0.001 \
+            --report-html diff.html \
+            --report-junit diff.junit.xml
+
+      - name: Run replay
+        if: hashFiles('dataset.json') != ''
+        env:
+          ENDPOINT_A: ${{ secrets.ENDPOINT_A }}
+          ENDPOINT_B: ${{ secrets.ENDPOINT_B }}
+        run: |
+          rpcduel replay \
+            --dataset dataset.json \
+            --rpc "$ENDPOINT_A" \
+            --rpc "$ENDPOINT_B" \
+            --max-mismatch-rate 0.001 \
+            --max-error-rate 0.01 \
+            --report-html replay.html \
+            --report-md replay.md \
+            --report-junit replay.junit.xml
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpcduel-reports
+          path: |
+            diff.html
+            diff.junit.xml
+            replay.html
+            replay.md
+            replay.junit.xml
+
+      - name: Publish JUnit results
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: rpcduel
+          path: "*.junit.xml"
+          reporter: java-junit
+          fail-on-error: "true"

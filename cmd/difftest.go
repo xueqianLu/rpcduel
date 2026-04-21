@@ -12,6 +12,7 @@ import (
 	"github.com/xueqianLu/rpcduel/internal/config"
 	"github.com/xueqianLu/rpcduel/internal/dataset"
 	"github.com/xueqianLu/rpcduel/internal/diff"
+	"github.com/xueqianLu/rpcduel/internal/metrics"
 	"github.com/xueqianLu/rpcduel/internal/replay"
 	"github.com/xueqianLu/rpcduel/internal/report"
 	"github.com/xueqianLu/rpcduel/internal/thresholds"
@@ -165,6 +166,12 @@ func runDiffTest(cmd *cobra.Command, args []string) error {
 
 	// Write to stdout.
 	printResult(os.Stdout, result, diffTestOutput)
+
+	// Publish replay diff category histogram to the metrics registry so
+	// it's exposed at /metrics and, if configured, pushed to the gateway.
+	for cat, n := range result.Summary() {
+		metrics.ObserveReplayCategory(string(cat), n)
+	}
 
 	// Write to report file if requested.
 	if diffTestReport != "" {

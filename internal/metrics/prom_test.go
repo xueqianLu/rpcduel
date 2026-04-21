@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,28 @@ import (
 	"testing"
 	"time"
 )
+
+func TestPush_NoURLIsNoOp(t *testing.T) {
+	if err := Push("", "job", nil); err != nil {
+		t.Fatalf("empty url should be no-op, got %v", err)
+	}
+}
+
+func TestPush_RoundTrip(t *testing.T) {
+	var got bytes.Buffer
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(&got, r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	ObserveReplayCategory("balance_mismatch", 2)
+	if err := Push(srv.URL, "rpcduel-test", map[string]string{"instance": "ci"}); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if !strings.Contains(got.String(), "rpcduel_replay_diffs_total") {
+		t.Errorf("pushed payload missing replay counter: %s", got.String())
+	}
+}
 
 func TestObserve_ExposesMetrics(t *testing.T) {
 	Observe("https://node-a.example", "eth_blockNumber", 12*time.Millisecond, false)

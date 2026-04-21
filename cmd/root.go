@@ -43,6 +43,9 @@ var (
 	globalRPSBurst     int
 	globalConfigPath   string
 	globalConfig       *config.Config
+	globalPushGateway  string
+	globalPushJob      string
+	globalPushLabels   []string
 
 	// metricsCtx is canceled when the root command exits to gracefully
 	// shut down the metrics HTTP server (if one was started).
@@ -85,6 +88,12 @@ var rootCmd = &cobra.Command{
 		return nil
 	},
 	PersistentPostRun: func(cmd *cobra.Command, args []string) {
+		if globalPushGateway != "" {
+			labels := parseLabels(globalPushLabels)
+			if err := metrics.Push(globalPushGateway, globalPushJob, labels); err != nil {
+				fmt.Fprintf(os.Stderr, "push-gateway: %v\n", err)
+			}
+		}
 		if metricsCancel != nil {
 			metricsCancel()
 		}
@@ -112,6 +121,9 @@ func init() {
 	pf.Float64Var(&globalRPS, "rps", 0, "Aggregate request rate cap in requests per second (0 = unlimited)")
 	pf.IntVar(&globalRPSBurst, "rps-burst", 0, "Token-bucket burst size for --rps (default: 1, or rounded-up rps)")
 	pf.StringVarP(&globalConfigPath, "config", "c", "", "Path to rpcduel.yaml config file")
+	pf.StringVar(&globalPushGateway, "push-gateway", "", "Prometheus Pushgateway URL (e.g. http://pushgateway:9091). Metrics are pushed at command exit.")
+	pf.StringVar(&globalPushJob, "push-job", "rpcduel", "Job label used when pushing to the Pushgateway")
+	pf.StringArrayVar(&globalPushLabels, "push-label", nil, "Additional Pushgateway grouping label in key=value form (repeatable)")
 
 	rootCmd.AddCommand(callCmd)
 	rootCmd.AddCommand(diffCmd)
@@ -120,6 +132,7 @@ func init() {
 	rootCmd.AddCommand(datasetCmd)
 	rootCmd.AddCommand(diffTestCmd)
 	rootCmd.AddCommand(benchgenCmd)
+	rootCmd.AddCommand(doctorCmd)
 }
 
 // runnerContext returns a context wired with the runner-side options derived
@@ -196,6 +209,26 @@ func parseHeaders(in []string) map[string]string {
 		} else {
 			continue
 		}
+		if k != "" {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// parseLabels parses "key=value" grouping labels for the Pushgateway.
+func parseLabels(in []string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for _, s := range in {
+		idx := strings.Index(s, "=")
+		if idx <= 0 {
+			continue
+		}
+		k := strings.TrimSpace(s[:idx])
+		v := strings.TrimSpace(s[idx+1:])
 		if k != "" {
 			out[k] = v
 		}

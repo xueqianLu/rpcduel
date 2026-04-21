@@ -18,6 +18,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/client_golang/prometheus/push"
 )
 
 var (
@@ -48,6 +49,14 @@ var (
 		[]string{"endpoint_a", "endpoint_b"},
 	)
 
+	replayDiffsByCategory = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "rpcduel_replay_diffs_total",
+			Help: "Total number of replay diffs observed, partitioned by category (balance_mismatch, nonce_mismatch, tx_mismatch, receipt_mismatch, trace_mismatch, block_mismatch, missing_data, rpc_error).",
+		},
+		[]string{"category"},
+	)
+
 	startOnce sync.Once
 )
 
@@ -56,6 +65,7 @@ func init() {
 		requestsTotal,
 		requestDuration,
 		diffsTotal,
+		replayDiffsByCategory,
 	)
 }
 
@@ -75,6 +85,29 @@ func ObserveDiff(endpointA, endpointB string, n int) {
 		return
 	}
 	diffsTotal.WithLabelValues(endpointA, endpointB).Add(float64(n))
+}
+
+// ObserveReplayCategory records the number of replay diffs seen in a given category.
+func ObserveReplayCategory(category string, n int) {
+	if n <= 0 {
+		return
+	}
+	replayDiffsByCategory.WithLabelValues(category).Add(float64(n))
+}
+
+// Push sends all collected metrics to a Prometheus Pushgateway at
+// gatewayURL under the given job name. Grouping labels are optional.
+// A zero-length gatewayURL is a no-op so callers can wire this to a
+// flag unconditionally.
+func Push(gatewayURL, job string, grouping map[string]string) error {
+	if gatewayURL == "" {
+		return nil
+	}
+	p := push.New(gatewayURL, job).Gatherer(registry)
+	for k, v := range grouping {
+		p = p.Grouping(k, v)
+	}
+	return p.Push()
 }
 
 // Handler returns the HTTP handler that exposes the rpcduel metrics

@@ -1,0 +1,77 @@
+# Example GitLab CI pipeline using rpcduel as a JSON-RPC gate.
+#
+# - Installs rpcduel from a pinned release.
+# - `doctor` step fails the pipeline immediately if endpoints are down.
+# - `diff` and `replay` jobs each produce a JUnit XML that GitLab
+#   renders natively on the merge request / pipeline page via the
+#   `artifacts:reports:junit` key.
+# - HTML reports are uploaded as regular artifacts and browsable from
+#   the job page.
+#
+# Set ENDPOINT_A / ENDPOINT_B as masked CI/CD variables.
+
+stages:
+  - probe
+  - verify
+
+variables:
+  RPCDUEL_VERSION: "0.2.0"
+
+.install-rpcduel: &install-rpcduel
+  before_script:
+    - apk add --no-cache curl || apt-get update && apt-get install -y curl
+    - curl -sSL -o /tmp/rpcduel.tar.gz
+        "https://github.com/xueqianLu/rpcduel/releases/download/v${RPCDUEL_VERSION}/rpcduel_${RPCDUEL_VERSION}_linux_amd64.tar.gz"
+    - tar -xzf /tmp/rpcduel.tar.gz -C /tmp
+    - install -m 0755 /tmp/rpcduel /usr/local/bin/rpcduel
+
+doctor:
+  stage: probe
+  image: alpine:3.20
+  <<: *install-rpcduel
+  script:
+    - rpcduel doctor --rpc "$ENDPOINT_A" --rpc "$ENDPOINT_B" --fail-on unreachable
+
+diff:
+  stage: verify
+  image: alpine:3.20
+  <<: *install-rpcduel
+  script:
+    - rpcduel diff
+        --rpc "$ENDPOINT_A" --rpc "$ENDPOINT_B"
+        --method eth_getBlockByNumber --params '["latest", false]'
+        --ignore-field hash
+        --repeat 20
+        --max-diff-rate 0.001
+        --report-html diff.html
+        --report-junit diff.junit.xml
+  artifacts:
+    when: always
+    paths:
+      - diff.html
+    reports:
+      junit: diff.junit.xml
+
+replay:
+  stage: verify
+  image: alpine:3.20
+  <<: *install-rpcduel
+  rules:
+    - exists:
+        - dataset.json
+  script:
+    - rpcduel replay
+        --dataset dataset.json
+        --rpc "$ENDPOINT_A" --rpc "$ENDPOINT_B"
+        --max-mismatch-rate 0.001
+        --max-error-rate 0.01
+        --report-html replay.html
+        --report-md replay.md
+        --report-junit replay.junit.xml
+  artifacts:
+    when: always
+    paths:
+      - replay.html
+      - replay.md
+    reports:
+      junit: replay.junit.xml

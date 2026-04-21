@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -180,13 +181,37 @@ func WriteReplayHTML(w io.Writer, r *replay.Result, breaches []thresholds.Breach
 		r.TotalRequests, r.SuccessRequests, r.SuccessRate()*100, len(r.Diffs))
 	sum := r.Summary()
 	if len(sum) > 0 {
-		fmt.Fprint(w, "<h2>Diffs by category</h2><table><tr><th>Category</th><th>Count</th></tr>")
-		for cat, count := range sum {
-			fmt.Fprintf(w, `<tr><td class="l">%s</td><td>%d</td></tr>`, html.EscapeString(string(cat)), count)
+		cats := sortedCategoryKeys(sum)
+		max := 0
+		for _, c := range cats {
+			if sum[c] > max {
+				max = sum[c]
+			}
+		}
+		fmt.Fprint(w, "<h2>Diffs by category</h2><table><tr><th>Category</th><th>Count</th><th>Distribution</th></tr>")
+		for _, cat := range cats {
+			count := sum[cat]
+			width := 0
+			if max > 0 {
+				width = (count * 400) / max
+			}
+			fmt.Fprintf(w, `<tr><td class="l">%s</td><td>%d</td><td><span class="bar" style="display:inline-block;height:10px;width:%dpx;background:#d73a49"></span></td></tr>`,
+				html.EscapeString(string(cat)), count, width)
 		}
 		fmt.Fprint(w, "</table>")
 	}
 	return nil
+}
+
+// sortedCategoryKeys returns the keys of m sorted lexicographically so
+// that HTML/Markdown category tables are deterministic across runs.
+func sortedCategoryKeys(m map[replay.DiffCategory]int) []replay.DiffCategory {
+	out := make([]replay.DiffCategory, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }
 
 // -----------------------------------------------------------------
@@ -292,9 +317,22 @@ func WriteReplayMarkdown(w io.Writer, r *replay.Result, breaches []thresholds.Br
 		r.TotalRequests, r.SuccessRequests, r.SuccessRate()*100, len(r.Diffs))
 	sum := r.Summary()
 	if len(sum) > 0 {
-		b.WriteString("\n## Diffs by category\n\n| Category | Count |\n|---|---:|\n")
-		for cat, count := range sum {
-			fmt.Fprintf(&b, "| %s | %d |\n", cat, count)
+		cats := sortedCategoryKeys(sum)
+		max := 0
+		for _, c := range cats {
+			if sum[c] > max {
+				max = sum[c]
+			}
+		}
+		b.WriteString("\n## Diffs by category\n\n| Category | Count | Share |\n|---|---:|---|\n")
+		for _, cat := range cats {
+			count := sum[cat]
+			bar := ""
+			if max > 0 {
+				n := (count * 20) / max
+				bar = strings.Repeat("█", n)
+			}
+			fmt.Fprintf(&b, "| %s | %d | %s |\n", cat, count, bar)
 		}
 	}
 	_, err := io.WriteString(w, b.String())
@@ -507,5 +545,20 @@ func WriteReplayJUnit(w io.Writer, r *replay.Result, breaches []thresholds.Breac
 	add("mismatch_rate", mismatchRate)
 	add("error_rate", errorRate)
 	add("max_mismatch", float64(len(r.Diffs)))
-	return writeJUnit(w, junitSuites{Name: "rpcduel.replay", Suites: []junitSuite{suite}})
+
+	// One additional suite with a testcase per replay diff category so
+	// CI runners surface the breakdown without anyone needing to read
+	// the HTML/Markdown report.
+	catSuite := junitSuite{Name: "replay_categories"}
+	for _, cat := range sortedCategoryKeys(r.Summary()) {
+		count := r.Summary()[cat]
+		tc := junitCase{
+			Name:      string(cat),
+			ClassName: "replay.category",
+			System:    &junitSystem{Body: fmt.Sprintf("%d", count)},
+		}
+		catSuite.Tests++
+		catSuite.Cases = append(catSuite.Cases, tc)
+	}
+	return writeJUnit(w, junitSuites{Name: "rpcduel.replay", Suites: []junitSuite{suite, catSuite}})
 }

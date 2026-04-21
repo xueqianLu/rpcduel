@@ -7,7 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-21
+
 ### Added
+- `rpcduel doctor` — connectivity, identity, and capability probe. For
+  every `--rpc` endpoint it runs `web3_clientVersion`, `eth_chainId`,
+  `eth_blockNumber`, `eth_syncing`, `net_peerCount`, and `eth_gasPrice`
+  in parallel, plus any extra methods supplied via `--probe`. Output is
+  a compact text table (default) or full JSON. Gating is controlled by
+  `--fail-on {never|unreachable|any}`; on failure the command exits 2
+  for CI use. Great as the first step of any rpcduel pipeline.
+- Prometheus Pushgateway exporter. New global flags
+  `--push-gateway URL`, `--push-job NAME`, and repeatable
+  `--push-label key=value` cause rpcduel to push every metric in its
+  registry (requests total, latency histogram, diff counters, **new
+  replay category counter**) to a Prometheus Pushgateway at command
+  exit. Complements the existing `--metrics-addr` pull-mode endpoint.
+- Replay diff category histogram. `replay`'s category breakdown
+  (`balance_mismatch`, `nonce_mismatch`, `tx_mismatch`,
+  `receipt_mismatch`, `trace_mismatch`, `block_mismatch`,
+  `missing_data`, `rpc_error`) is now surfaced three ways: the new
+  `rpcduel_replay_diffs_total{category=…}` Prometheus counter, a
+  deterministic bar chart in the HTML and Markdown reports, and one
+  JUnit `<testcase>` per category inside a dedicated
+  `replay_categories` suite — so CI runners show the distribution
+  without anyone opening the HTML.
+- CI workflow templates in `examples/ci/` for GitHub Actions and
+  GitLab CI, wiring `doctor`, `diff`, and `replay` with SLO thresholds
+  and JUnit uploads. See `examples/ci/README.md`.
+
+### Added (previously in Unreleased)
 - YAML configuration file support. New global `--config / -c PATH` flag
   loads a `rpcduel.yaml` describing endpoints, per-section defaults
   (bench, duel, diff, replay), SLO thresholds, and report destinations.
@@ -28,12 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `diff`, and `replay`. New per-command flags `--report-html PATH`,
   `--report-md PATH`, `--report-junit PATH` (also configurable via
   `reports.{html,markdown,junit}`) write self-contained reports
-  alongside the existing stdout output. The HTML report has no external
-  dependencies (inline CSS, inline bar charts) and embeds the
-  PASS/FAIL banner; the JUnit XML produces one `<testcase>` per metric
-  per endpoint, turning each threshold breach into a `<failure>` so
-  CI runners (GitHub Actions test reporter, Jenkins, etc.) can surface
-  rpcduel results natively.
+  alongside the existing stdout output.
 
 ## [0.1.0] - 2026-04-20
 
