@@ -10,6 +10,8 @@
 **rpcduel** is a high-performance CLI for comparing and benchmarking Ethereum JSON-RPC endpoints.
 A single binary lets you call any RPC, diff responses across nodes, run concurrent benchmarks, and — its signature feature — drive realistic consistency tests and load tests from on-chain data you collect yourself.
 
+📖 **Full documentation:** <https://xueqianlu.github.io/rpcduel/>
+
 ---
 
 ## ✨ Why rpcduel?

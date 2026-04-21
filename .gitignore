@@ -31,3 +31,8 @@ go.work.sum
 .idea/
 .vscode/
 extras/
+
+# Docs site (VitePress)
+docs/node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/
