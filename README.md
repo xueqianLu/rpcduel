@@ -7,43 +7,60 @@
 [![License: MIT](https://img.shields.io/github/license/xueqianLu/rpcduel)](LICENSE)
 [![Latest Release](https://img.shields.io/github/v/release/xueqianLu/rpcduel?sort=semver)](https://github.com/xueqianLu/rpcduel/releases)
 
-**rpcduel** is a high-performance CLI tool for comparing and benchmarking Ethereum JSON-RPC endpoints.  
-It collects real on-chain data, runs response-consistency tests across multiple nodes, and generates realistic load-test scenarios — all from a single binary.
+**rpcduel** is a high-performance CLI for comparing and benchmarking Ethereum JSON-RPC endpoints.
+A single binary lets you call any RPC, diff responses across nodes, run concurrent benchmarks, and — its signature feature — drive realistic consistency tests and load tests from on-chain data you collect yourself.
+
+---
+
+## ✨ Why rpcduel?
+
+> The **`dataset → replay / benchgen`** workflow is what sets rpcduel apart from generic benchmarking tools.
+>
+> You scan a real block range once, then reuse that dataset to run **data-driven consistency tests** (`replay`) and **realistic mixed-traffic load tests** (`benchgen`) against any pair of nodes — no scripting, no manual fixtures.
+
+```
+        Ethereum JSON-RPC endpoint
+                   │
+       rpcduel dataset --rpc …
+                   │
+              dataset.json
+              ┌────┴─────┐
+       replay │          │ benchgen
+              ▼          ▼
+       Consistency    Performance
+         report      report + CSV
+```
+
+Jump straight to the [Data-Driven Workflow](#advanced-data-driven-testing) section, or read on for the basics.
 
 ---
 
 ## Table of Contents
 
-- [Features](#features)
 - [Installation](#installation)
-- [Commands](#commands)
-  - [call](#call)
-  - [diff](#diff)
-  - [bench](#bench)
-  - [duel](#duel)
-  - [dataset](#dataset)
-  - [replay](#replay)
-  - [benchgen](#benchgen)
-- [Data-Driven Testing Workflow](#data-driven-testing-workflow)
+- [Basic Commands](#basic-commands)
+  - [Global flags](#global-flags)
+  - [`call`](#call)
+  - [`diff`](#diff)
+  - [`bench`](#bench)
+  - [`duel`](#duel)
+- [Advanced: Data-Driven Testing](#advanced-data-driven-testing) ⭐
+  - [`dataset`](#dataset)
+  - [`replay`](#replay)
+  - [`benchgen`](#benchgen)
+  - [End-to-end workflow](#end-to-end-workflow)
+- [Advanced Features](#advanced-features)
+  - [Configuration file](#configuration-file)
+  - [SLO thresholds & CI gating](#slo-thresholds--ci-gating)
+  - [Reports (HTML / Markdown / JUnit)](#reports-html--markdown--junit)
+  - [Prometheus metrics & Pushgateway](#prometheus-metrics--pushgateway)
+  - [`doctor` — endpoint capability check](#doctor--endpoint-capability-check)
+  - [CI templates](#ci-templates)
+  - [Shell completions & man pages](#shell-completions--man-pages)
 - [Output Formats](#output-formats)
 - [Dataset File Format](#dataset-file-format)
 - [Architecture](#architecture)
-
----
-
-## Features
-
-| Capability | Description |
-|---|---|
-| **Direct RPC calls** | Invoke any Ethereum JSON-RPC method from the CLI without hand-writing `curl` commands; HTTP(S), WebSocket (`ws://`, `wss://`), and Unix IPC (`unix://`) endpoints are all supported transparently |
-| **Response diffing** | Deep JSON comparison with hex/decimal normalisation, field ignoring, and order-insensitive array comparison |
-| **Benchmarking** | Concurrent load generation with QPS, HDR-histogram-backed P50/P95/P99/P999 latencies and error-rate reporting; `--rps` token-bucket rate limiting and `--warmup` settling phase |
-| **Duel mode** | Run diff and bench simultaneously against two endpoints |
-| **On-chain dataset collection** | Scan a block range (high → low) via an Ethereum JSON-RPC endpoint using multiple concurrent goroutines and collect blocks, transactions, and accounts ranked by activity; per-account transaction lists are stored in the dataset for efficient replay |
-| **Data-driven consistency tests** | Replay real chain data against two endpoints and classify every difference (`balance_mismatch`, `nonce_mismatch`, `tx_mismatch`, …) |
-| **Scenario-driven load test** | Turn a dataset into weighted scenarios, optionally export them as a bench file, and run them directly with `benchgen`; per-scenario metrics (QPS, avg/P50/P95/P99/min/max latency, error rate) are written to a CSV report |
-| **Archive-node awareness** | `missing trie node` / `state not found` errors are detected and excluded from diff counts |
-| **Flexible output** | Human-readable text or machine-parseable JSON from every command |
+- [License](#license)
 
 ---
 
@@ -78,7 +95,9 @@ Requires **Go 1.23+**.
 
 ---
 
-## Commands
+## Basic Commands
+
+The four basic commands cover everyday RPC ergonomics: invoke a method, compare responses across nodes, generate load, and do both at once.
 
 ### Global flags
 
@@ -86,57 +105,30 @@ These flags apply to every subcommand:
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--config`, `-c` | (none) | Path to an `rpcduel.yaml` config file. CLI flags always override config values. See [Configuration file](#configuration-file). |
 | `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error`. |
 | `--log-format` | `text` | Log format: `text` or `json` (structured output via `slog`). |
-| `--retries` | `0` | Number of retries on network / 5xx / 408 / 429 failures. JSON-RPC application errors are not retried. |
+| `--retries` | `0` | Retries on network / 5xx / 408 / 429 failures. JSON-RPC application errors are not retried. |
 | `--retry-backoff` | `200ms` | Initial exponential backoff between retries. |
 | `--header` | (none) | Extra HTTP header sent with every RPC request. May be repeated. Accepts `Key: Value` or `Key=Value`. |
 | `--user-agent` | `rpcduel/<version>` | Override the `User-Agent` header. |
-| `--insecure` | `false` | Skip TLS certificate verification on outbound HTTPS requests. **Development only** — never use against production endpoints. |
-| `--metrics-addr` | (disabled) | If set (e.g. `:9090`), expose Prometheus metrics at `/metrics` while the command runs. See [Prometheus metrics](#prometheus-metrics). |
+| `--insecure` | `false` | Skip TLS certificate verification on outbound HTTPS requests. **Development only.** |
+| `--metrics-addr` | (disabled) | Expose Prometheus metrics at `/metrics` on the given address (e.g. `:9090`). |
+| `--push-gateway` | (disabled) | Prometheus Pushgateway URL; metrics are pushed at command exit. |
+| `--push-job` | `rpcduel` | Job label used when pushing. |
+| `--push-label` | (none) | Extra Pushgateway grouping label, repeatable, in `key=value` form. |
 
 Examples live in [`examples/`](./examples/README.md).
 
-### Shell completions
-
-Cobra ships completion scripts for bash, zsh, fish, and PowerShell:
-
-```sh
-# Bash (current shell)
-source <(rpcduel completion bash)
-# Zsh, persistent
-rpcduel completion zsh > "${fpath[1]}/_rpcduel"
-# Fish
-rpcduel completion fish > ~/.config/fish/completions/rpcduel.fish
-```
-
-Pre-built completion scripts and man pages are bundled in every release archive
-under `completions/` and `man/`.
-
-### Prometheus metrics
-
-Pass `--metrics-addr :9090` to any command to expose a Prometheus-format
-metrics endpoint at `http://localhost:9090/metrics` while the command runs.
-The exporter publishes:
-
-| Metric | Type | Labels |
-|--------|------|--------|
-| `rpcduel_requests_total` | counter | `endpoint`, `scenario`, `status` (`ok`/`error`) |
-| `rpcduel_request_duration_seconds` | histogram | `endpoint`, `scenario` |
-| `rpcduel_diffs_total` | counter | `endpoint_a`, `endpoint_b` |
-
-`scenario` is the per-request tag from the bench scenario file when present,
-otherwise the JSON-RPC method name.
-
 ### `call`
 
-Call any JSON-RPC method directly against a single endpoint. This is the fastest way to replace one-off `curl` commands when debugging or exploring node behavior.
+Call any JSON-RPC method directly against a single endpoint. The fastest way to replace one-off `curl` commands when debugging or exploring node behavior.
 
 ```
 rpcduel call [method] [param...] [flags]
 ```
 
-When a method and params are provided positionally, `rpcduel` uses them directly. This makes one-off calls very convenient:
+When a method and params are provided positionally, `rpcduel` uses them directly:
 
 ```bash
 rpcduel call --rpc https://rpc.example.com eth_getBalance 0xa11111 latest
@@ -145,9 +137,9 @@ rpcduel call --rpc https://rpc.example.com eth_getBalance 0xa11111 latest
 Positional params are parsed smartly:
 
 - plain tokens like `latest`, `0xa11111`, addresses, and tx hashes stay as strings
-- JSON literals like `true`, `false`, `null`, `123`, `{"k":1}`, and `[1,2]` are decoded as JSON values
+- JSON literals like `true`, `false`, `null`, `123`, `{"k":1}`, and `[1,2]` are decoded as JSON
 
-To avoid ambiguity, positional params cannot be mixed with `--params` or `--params-file` in the same call.
+To avoid ambiguity, positional params cannot be mixed with `--params` or `--params-file`.
 
 | Flag | Default | Description |
 |---|---|---|
@@ -168,12 +160,6 @@ rpcduel call --rpc https://rpc.example.com
 rpcduel call \
   --rpc https://rpc.example.com \
   eth_getBalance 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045 latest
-
-# Flag-based form is still supported
-rpcduel call \
-  --rpc https://rpc.example.com \
-  --method eth_getBalance \
-  --params '["0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", "latest"]'
 
 # Load params from a file to avoid shell escaping
 rpcduel call \
@@ -220,29 +206,12 @@ rpcduel diff \
   --ignore-field logsBloom
 
 # Load a batch of requests from a file and output JSON
-```json
-# example requests.json
-[
-  {
-    "method": "eth_getBalance",
-    "params": ["0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", "latest"]
-  },
-  {
-    "method": "eth_getTransactionCount",
-    "params": ["0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", "latest"]
-  }
-]
-```
-
-```
 rpcduel diff \
   --rpc https://rpc-a.example.com \
   --rpc https://rpc-b.example.com \
   --input requests.json \
   --output json
 ```
-
----
 
 ### `bench`
 
@@ -261,8 +230,12 @@ rpcduel bench [flags]
 | `--concurrency` | `10` | Concurrent workers |
 | `--requests` | `100` | Total requests (0 = use `--duration`) |
 | `--duration` | | Run for a fixed time instead (e.g. `30s`) |
+| `--rps` | `0` | Token-bucket rate limit (requests/sec, 0 = unlimited) |
+| `--warmup` | `0` | Warm-up phase whose samples are discarded (e.g. `5s`) |
 | `--timeout` | `30s` | Per-request timeout |
 | `--output` | `text` | `text` or `json` |
+
+Latencies are tracked with HDR histograms (P50/P95/P99/P999).
 
 **Examples**
 
@@ -282,10 +255,6 @@ rpcduel bench \
   --concurrency 50 \
   --requests 10000
 ```
-
-When `--input` is used with `--requests`, scenarios are sampled proportionally to their weights, creating realistic mixed load.
-
----
 
 ### `duel`
 
@@ -308,8 +277,6 @@ rpcduel duel [flags]
 | `--timeout` | `30s` | Per-request timeout |
 | `--output` | `text` | `text` or `json` |
 
-**Example**
-
 ```bash
 rpcduel duel \
   --rpc https://rpc-a.example.com \
@@ -322,11 +289,15 @@ rpcduel duel \
 
 ---
 
+## Advanced: Data-Driven Testing
+
+This is the part that makes rpcduel different. Instead of asking you to invent fixtures or write traffic generators, rpcduel **scans real blocks once**, persists them to a `dataset.json`, and lets you replay that data as either a consistency test or a load test.
+
 ### `dataset`
 
-Scan a block range **from high to low** via an Ethereum JSON-RPC endpoint and save a representative set of blocks, transactions, and accounts to a JSON file for use with `replay` and `benchgen`.
+Scan a block range **from high to low** via an Ethereum JSON-RPC endpoint and save a representative set of blocks, transactions, and accounts.
 
-The scanner calls `eth_getBlockByNumber` (with full transaction objects) for every block in the range, collects non-empty blocks, extracts transactions, and ranks all addresses by the number of times they appear — all without requiring an external explorer.
+The scanner calls `eth_getBlockByNumber` (with full transaction objects) for every block in the range, collects non-empty blocks, extracts transactions, and ranks all addresses by activity — no external explorer required.
 
 ```
 rpcduel dataset [flags]
@@ -340,48 +311,34 @@ rpcduel dataset [flags]
 | `--accounts` | `1000` | Max accounts to collect (sorted by observed tx count) |
 | `--txs` | `1000` | Max transactions to collect |
 | `--blocks` | `1000` | Max non-empty blocks to collect |
-| `--max-tx-per-account` | `100` | Max transactions stored per account in the dataset (0 = unlimited) |
-| `--concurrency` | `4` | Number of goroutines used to fetch blocks from the RPC endpoint |
+| `--max-tx-per-account` | `100` | Max transactions stored per account (0 = unlimited) |
+| `--concurrency` | `4` | Number of goroutines used to fetch blocks |
 | `--chain` | `ethereum` | Chain name written to dataset metadata |
 | `--out` | `dataset.json` | Output file path |
-
-**Example**
 
 ```bash
 rpcduel dataset \
   --rpc https://rpc.example.com \
   --from-block 20000000 \
   --to-block 20001000 \
-  --accounts 500 \
-  --txs 500 \
-  --blocks 200 \
-  --chain ethereum \
+  --accounts 500 --txs 500 --blocks 200 \
   --out mainnet-dataset.json
 ```
 
-Scanning stops early once all three collection limits (`--accounts`, `--txs`, `--blocks`) are satisfied. When `--to-block` is omitted, the current chain head is resolved automatically via `eth_blockNumber`.
-
-Per-account transaction lists (up to `--max-tx-per-account` entries each) are embedded directly in each account record. This allows `replay` to query historical account state at the correct block numbers without re-fetching transaction lists at test time.
-
-The exported JSON is deterministically ordered: accounts by tx count (descending), blocks by number (descending), and transactions by block number (ascending).
-
----
+Scanning stops early once all three collection limits are satisfied. Per-account transaction lists are embedded so `replay` can query historical state without re-fetching tx data. Output is deterministically ordered.
 
 ### `replay`
 
-Load a dataset and run a full consistency test suite against two endpoints.  
-Every account, transaction, and block in the dataset generates real RPC calls, and any response differences are classified and reported.
+Load a dataset and run a full consistency test suite against two endpoints. Every account, transaction, and block in the dataset generates real RPC calls, and any response differences are classified and reported.
 
-By default, `replay` covers the basic RPCs below. Trace RPCs can be enabled explicitly with flags when needed.
-
-The old command name `diff-test` is still accepted as a compatibility alias.
+By default, `replay` covers the basic RPCs below. Trace RPCs can be enabled explicitly.
 
 - accounts → `eth_getBalance`, `eth_getTransactionCount`
 - transactions → `eth_getTransactionByHash`, `eth_getTransactionReceipt`
 - blocks → `eth_getBlockByNumber`
 - optional trace RPCs → `debug_traceTransaction` (`--trace-transaction`), `debug_traceBlockByNumber` (`--trace-block`)
 
-To avoid wasted work, duplicate tasks with the same **method + params** are automatically removed. Different methods for the same transaction or block are **not** treated as duplicates, so `eth_getTransactionByHash` and `debug_traceTransaction` will both run.
+Duplicate tasks with the same **method + params** are automatically deduplicated.
 
 ```
 rpcduel replay [flags]
@@ -392,24 +349,22 @@ rpcduel replay [flags]
 | `--dataset` | `dataset.json` | Path to the dataset file |
 | `--rpc` | _(required, =2)_ | Exactly two endpoint URLs |
 | `--max-tx-per-account` | `100` | Max transactions tested per account (0 = unlimited) |
-| `--trace-transaction` | `false` | Also compare `debug_traceTransaction` for dataset transactions |
-| `--trace-block` | `false` | Also compare `debug_traceBlockByNumber` for dataset blocks |
-| `--only` | | Only run selected replay targets, e.g. `balance`, `transaction`, `block`, `trace` |
+| `--trace-transaction` | `false` | Also compare `debug_traceTransaction` |
+| `--trace-block` | `false` | Also compare `debug_traceBlockByNumber` |
+| `--only` | | Limit to selected targets (`balance`, `transaction`, `block`, `trace`, …) |
 | `--concurrency` | `4` | Number of goroutines used to execute RPC calls |
 | `--ignore-field` | | Field name(s) to skip in comparison |
 | `--timeout` | `30s` | Per-request timeout |
 | `--output` | `text` | `text` or `json` |
-| `--report` | | Write the report to this file (in addition to stdout) |
+| `--report` | | Write the text/JSON report to this file (in addition to stdout) |
 | `--csv` | | Write a CSV diff report (category, method, params, detail) to this file |
+| `--report-html` | | Write a self-contained HTML report (with category bar chart) |
+| `--report-md` | | Write a Markdown report |
+| `--report-junit` | | Write a JUnit XML report (replay metrics + per-category suite) |
 
-**Progress** is printed to stderr automatically as tasks complete — one line every 100 tasks and a final line at 100%.  Example:
+The old command name `diff-test` is still accepted as a compatibility alias.
 
-```
-Progress: 100/1000 tasks (10.0%)
-Progress: 200/1000 tasks (20.0%)
-...
-Progress: 1000/1000 tasks (100.0%)
-```
+**Progress** is printed to stderr automatically, one line every 100 tasks and a final 100% line.
 
 **Diff categories**
 
@@ -425,16 +380,12 @@ Progress: 1000/1000 tasks (100.0%)
 | `rpc_error` | One endpoint returns an error, the other succeeds |
 | `unsupported` _(not counted as diff)_ | Both endpoints return archive-node errors (`missing trie node`, `state not found`) |
 
-Trace RPCs are often much heavier than standard RPCs and may not be enabled on every node, so they are disabled by default.
-
-When `--only` is provided, replay only generates the selected directions. Supported values are:
+When `--only` is provided, supported values are:
 
 - fine-grained: `balance`, `transaction_count`, `transaction_by_hash`, `transaction_receipt`, `block_by_number`, `trace_transaction`, `trace_block`
 - aliases: `account`, `transaction`, `block`, `trace`
 
-`--only` cannot be combined with `--trace-transaction` or `--trace-block`; if you want trace-only replay, use `--only trace` or `--only trace_transaction`.
-
-**Example**
+`--only` cannot be combined with `--trace-transaction` or `--trace-block`.
 
 ```bash
 rpcduel replay \
@@ -442,28 +393,17 @@ rpcduel replay \
   --rpc https://rpc-a.example.com \
   --rpc https://rpc-b.example.com \
   --max-tx-per-account 50 \
-  --trace-transaction \
-  --trace-block \
+  --trace-transaction --trace-block \
   --output json \
   --report replay-report.json \
-  --csv replay-report.csv
+  --csv replay-report.csv \
+  --report-html replay.html \
+  --report-junit replay.junit.xml
 ```
-
-```bash
-# Only replay transaction-related checks
-rpcduel replay \
-  --dataset mainnet-dataset.json \
-  --rpc https://rpc-a.example.com \
-  --rpc https://rpc-b.example.com \
-  --only transaction
-```
-
----
 
 ### `benchgen`
 
-Generate weighted load-test scenarios from a dataset and **run them directly** against one or more endpoints.  
-After the run, a performance summary is printed to stdout and an optional per-scenario CSV report can be written to a file. You can also export the generated scenario file with `--out` and reuse it later with `rpcduel bench --input`.
+Generate weighted load-test scenarios from a dataset and **run them directly** against one or more endpoints. After the run, a performance summary is printed to stdout and an optional per-scenario CSV report is written. You can also export the scenario file with `--out` and reuse it later via `rpcduel bench --input`.
 
 ```
 rpcduel benchgen [flags]
@@ -473,13 +413,13 @@ rpcduel benchgen [flags]
 |---|---|---|
 | `--dataset` | `dataset.json` | Path to the dataset file |
 | `--rpc` | _(required, ≥1)_ | Endpoint URL(s) to benchmark |
-| `--concurrency` | `10` | Number of concurrent workers |
-| `--requests` | `1000` | Total requests to send (0 = use `--duration`) |
-| `--duration` | | Run for a fixed time instead (e.g. `60s`) |
+| `--concurrency` | `10` | Concurrent workers |
+| `--requests` | `1000` | Total requests (0 = use `--duration`) |
+| `--duration` | | Run for a fixed time (e.g. `60s`) |
 | `--timeout` | `30s` | Per-request timeout |
-| `--trace-transaction` | `false` | Include the `debug_traceTransaction` scenario |
-| `--trace-block` | `false` | Include the `debug_traceBlockByNumber` scenario |
-| `--only` | | Only include selected scenario groups, e.g. `balance`, `transaction`, `block`, `logs`, `mixed_balance`, `trace` |
+| `--trace-transaction` | `false` | Include `debug_traceTransaction` scenario |
+| `--trace-block` | `false` | Include `debug_traceBlockByNumber` scenario |
+| `--only` | | Only include selected scenario groups (`balance`, `transaction`, `block`, `logs`, `mixed_balance`, `trace`) |
 | `--out` | | Write the generated bench scenario file to this path |
 | `--output` | `text` | `text` or `json` for the stdout summary |
 | `--csv` | | Write a detailed per-scenario CSV report to this file |
@@ -498,68 +438,31 @@ rpcduel benchgen [flags]
 | `debug_trace_block` | 0.05 | `debug_traceBlockByNumber` _(only with `--trace-block`)_ |
 | `mixed_balance` | 0.05 | `eth_getBalance` at shuffled historical block heights |
 
-Requests are sampled from all enabled scenarios proportionally to their weights, producing realistic mixed traffic. In `--duration` mode, requests are sampled continuously at runtime instead of cycling a pre-built request pool.
+Requests are sampled from all enabled scenarios proportionally to their weights. In `--duration` mode, requests are sampled continuously at runtime instead of cycling a pre-built request pool.
 
-Trace scenarios are disabled by default because they are often much heavier than standard RPCs and may not be supported by every node.
-
-When `--only` is provided, benchgen limits generation and execution to the selected scenario groups. Supported values include:
-
-- scenario names: `balance`, `transaction_count`, `transaction_by_hash`, `transaction_receipt`, `block_by_number`, `get_logs`, `mixed_balance`, `debug_trace_transaction`, `debug_trace_block`
-- aliases: `account`, `transaction`, `block`, `logs`, `trace`, `trace_transaction`, `trace_block`
-
-`--only` cannot be combined with `--trace-transaction` or `--trace-block`; use `--only trace` or `--only debug_trace_transaction` instead.
-
-**CSV report columns**
-
-`endpoint`, `scenario`, `total`, `errors`, `error_rate_pct`, `qps`, `avg_latency_ms`, `p50_latency_ms`, `p95_latency_ms`, `p99_latency_ms`, `min_latency_ms`, `max_latency_ms`
-
-**Example**
+**CSV report columns:** `endpoint`, `scenario`, `total`, `errors`, `error_rate_pct`, `qps`, `avg_latency_ms`, `p50_latency_ms`, `p95_latency_ms`, `p99_latency_ms`, `min_latency_ms`, `max_latency_ms`.
 
 ```bash
+# Run a realistic mixed load with trace scenarios and a CSV report
 rpcduel benchgen \
   --dataset mainnet-dataset.json \
   --rpc https://node-a.example.com \
   --rpc https://node-b.example.com \
-  --concurrency 20 \
-  --requests 5000 \
+  --concurrency 20 --requests 5000 \
   --trace-transaction \
   --csv bench-report.csv
-```
 
-```bash
 # Only benchmark logs + historical mixed balances
-rpcduel benchgen \
-  --dataset mainnet-dataset.json \
+rpcduel benchgen --dataset mainnet-dataset.json \
   --rpc https://node-a.example.com \
   --only logs,mixed_balance
-```
 
-```bash
 # Export the generated scenario file without running it
-rpcduel benchgen \
-  --dataset mainnet-dataset.json \
-  --trace-transaction \
-  --out bench.json
+rpcduel benchgen --dataset mainnet-dataset.json \
+  --trace-transaction --out bench.json
 ```
 
----
-
-## Data-Driven Testing Workflow
-
-```
-              Ethereum JSON-RPC endpoint
-                         │
-              rpcduel dataset --rpc …
-                         │
-                   dataset.json
-                    ┌────┴────┐
-                    │         │
-             replay │         │ benchgen
-                    │         │
-                    ▼         ▼
-              Consistency  Performance report
-               report       + bench-report.csv
-```
+### End-to-end workflow
 
 **Step 1 — Collect data**
 
@@ -582,21 +485,127 @@ rpcduel replay \
   --csv replay-report.csv
 ```
 
-Progress is printed to stderr as tasks complete. When finished, the summary is printed to stdout (or `--report` file) and a full CSV of all diffs is written to `--csv`.
-
-**Step 3 — Run the load test directly**
+**Step 3 — Run the load test**
 
 ```bash
 rpcduel benchgen \
   --dataset dataset.json \
   --rpc https://node-a.example.com \
-  --concurrency 20 \
-  --requests 5000 \
+  --concurrency 20 --requests 5000 \
   --csv bench-report.csv
 ```
 
-Scenarios are generated internally from the dataset and executed immediately.  
-The per-scenario performance summary is printed to stdout and a detailed CSV is written to `--csv`. If `--out` is provided, the generated bench file is also saved for reuse.
+---
+
+## Advanced Features
+
+### Configuration file
+
+Pass `--config rpcduel.yaml` (or `-c`) to load defaults for any subcommand. CLI flags always win. Environment variables expand as `${VAR}` or `${VAR:-default}`; use `$$` for a literal `$`. See [`examples/rpcduel.yaml`](./examples/rpcduel.yaml) for a complete sample covering endpoints, defaults, per-command sections, thresholds, and report destinations.
+
+### SLO thresholds & CI gating
+
+The config file can declare SLO thresholds for every command. When any threshold is breached, rpcduel prints a `FAIL` summary to stderr and exits with code **2**, which makes CI fail loudly:
+
+```yaml
+thresholds:
+  bench:
+    p95_ms: 250
+    p99_ms: 500
+    error_rate: 0.01     # 1%
+  duel:
+    p99_ms: 500
+    error_rate: 0.01
+    diff_rate: 0.001     # 0.1% mismatch
+  diff:
+    diff_rate: 0.0
+    max_diffs: 0
+  replay:
+    mismatch_rate: 0.001
+    error_rate: 0.01
+    max_mismatch: 5
+```
+
+### Reports (HTML / Markdown / JUnit)
+
+`replay` (and the other commands when applicable) can emit machine- and human-friendly reports in addition to stdout:
+
+| Flag | Format | Notes |
+|---|---|---|
+| `--report` | Text or JSON (matches `--output`) | Mirror of stdout to a file |
+| `--csv` | CSV | Full per-diff detail (category, method, params, detail) |
+| `--report-html` | Self-contained HTML | Includes a deterministic per-category bar chart |
+| `--report-md` | Markdown | Includes a per-category share column |
+| `--report-junit` | JUnit XML | One suite for threshold metrics + one suite per diff category |
+
+Default destinations can be set under the `reports:` section of the config file.
+
+### Prometheus metrics & Pushgateway
+
+Pass `--metrics-addr :9090` to any command to expose a Prometheus-format metrics endpoint at `http://localhost:9090/metrics` while the command runs. The exporter publishes:
+
+| Metric | Type | Labels |
+|--------|------|--------|
+| `rpcduel_requests_total` | counter | `endpoint`, `scenario`, `status` (`ok`/`error`) |
+| `rpcduel_request_duration_seconds` | histogram | `endpoint`, `scenario` |
+| `rpcduel_diffs_total` | counter | `endpoint_a`, `endpoint_b` |
+| `rpcduel_replay_diffs_total` | counter | `category` |
+
+`scenario` is the per-request tag from the bench scenario file when present, otherwise the JSON-RPC method name.
+
+For short-lived runs (CI, cron) use the **Pushgateway** flags instead:
+
+```bash
+rpcduel replay \
+  --dataset dataset.json \
+  --rpc https://a.example.com --rpc https://b.example.com \
+  --push-gateway http://pushgateway:9091 \
+  --push-job nightly-replay \
+  --push-label run_id=$GITHUB_RUN_ID \
+  --push-label chain=mainnet
+```
+
+Metrics are pushed once at command exit.
+
+### `doctor` — endpoint capability check
+
+A fast pre-flight that probes a curated set of methods (`web3_clientVersion`, `eth_chainId`, `eth_blockNumber`, `eth_syncing`, `net_peerCount`, `eth_gasPrice`, plus anything you pass via `--probe`) against every endpoint in parallel and prints a capability matrix. Use it as a hard gate at the top of CI pipelines.
+
+```
+rpcduel doctor [flags]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--rpc` | _(required, ≥1)_ | Endpoint URL(s) to probe |
+| `--probe` | (none) | Extra JSON-RPC methods to probe, repeatable |
+| `--timeout` | `10s` | Per-probe timeout |
+| `--output` | `text` | `text` or `json` |
+| `--fail-on` | `unreachable` | `never`, `unreachable`, or `any`. Failure exits with code **2**. |
+
+```bash
+rpcduel doctor \
+  --rpc https://node-a.example.com \
+  --rpc https://node-b.example.com \
+  --probe debug_traceTransaction \
+  --fail-on any
+```
+
+### CI templates
+
+Drop-in pipelines for GitHub Actions and GitLab CI live under [`examples/ci/`](./examples/ci/). They wire `doctor` + `diff` + `replay` with SLO thresholds and JUnit uploads, and include a README documenting the shape of a typical pipeline.
+
+### Shell completions & man pages
+
+Cobra ships completion scripts for bash, zsh, fish, and PowerShell:
+
+```sh
+source <(rpcduel completion bash)
+rpcduel completion zsh > "${fpath[1]}/_rpcduel"
+rpcduel completion fish > ~/.config/fish/completions/rpcduel.fish
+```
+
+Pre-built completion scripts and man pages are bundled in every release archive under `completions/` and `man/`.
 
 ---
 
@@ -706,10 +715,7 @@ Endpoint:   https://rpc.example.com
     "rpc": "https://rpc.example.com",
     "generated_at": "2026-03-23T06:00:00Z"
   },
-  "range": {
-    "from": 20000000,
-    "to": 20001000
-  },
+  "range": { "from": 20000000, "to": 20001000 },
   "accounts": [
     {
       "address": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
@@ -747,7 +753,7 @@ Endpoint:   https://rpc.example.com
 | `blocks` | `number` descending (newest first) |
 | `transactions` | `block_number` ascending (chronological) |
 
-Each account record includes a `transactions` list (up to `--max-tx-per-account` entries) containing the transactions that account participated in during the scan range. `replay` uses these stored block numbers to query historical state without re-fetching transaction data from the RPC node.
+Each account record includes a `transactions` list (up to `--max-tx-per-account` entries) so `replay` can query historical state without re-fetching transaction data.
 
 ---
 
@@ -761,28 +767,34 @@ rpcduel/
 │   ├── bench.go
 │   ├── duel.go
 │   ├── dataset.go
-│   ├── difftest.go
-│   └── benchgen.go
+│   ├── difftest.go       (replay)
+│   ├── benchgen.go
+│   └── doctor.go
 └── internal/
-    ├── rpc/              JSON-RPC HTTP client with latency measurement
+    ├── rpc/              JSON-RPC client (HTTP/WS/IPC) with latency measurement
     ├── diff/             Deep JSON comparison (hex normalisation, field ignoring, order)
-    ├── bench/            Metrics collection (QPS, percentiles, error rate)
+    ├── bench/            HDR-histogram-backed metrics (QPS, percentiles, error rate)
     ├── runner/           Concurrent worker pools (fixed count, duration, paired)
-    ├── report/           Text & JSON report rendering
+    ├── report/           Text / JSON / HTML / Markdown / JUnit report rendering
     ├── dataset/          Dataset types + Ethereum JSON-RPC chain scanner
     ├── benchgen/         Scenario generation & weighted request sampling
-    └── replay/           Data-driven replay engine
+    ├── replay/           Data-driven replay engine + diff classifier
+    ├── doctor/           Endpoint capability probes
+    ├── config/           rpcduel.yaml loader with env expansion
+    ├── thresholds/       SLO threshold evaluator
+    └── metrics/          Prometheus exporter + Pushgateway client
 ```
 
 **Key design decisions**
 
-- **Hex normalisation** — `"0x1a"` and `"26"` are treated as equal by the diff engine, avoiding false positives from encoding differences.
-- **Weighted dispatch** — `benchgen` assigns a weight to every scenario; `bench --input` samples requests proportionally, so realistic mixed traffic emerges without manual scripting.
+- **Hex normalisation** — `"0x1a"` and `"26"` are equal in the diff engine, avoiding false positives from encoding differences.
+- **Weighted dispatch** — `benchgen` assigns a weight to every scenario; sampling is proportional, so realistic mixed traffic emerges without manual scripting.
 - **Archive-node detection** — `replay` recognises `missing trie node` / `state not found` errors and marks those requests as `unsupported` rather than counting them as mismatches.
 - **Graceful partial results** — network errors and API timeouts during dataset collection are logged as warnings; already-collected data is saved regardless.
+- **CI-first** — non-zero exit codes for SLO breaches, JUnit reports, doctor pre-flight, and Pushgateway support so rpcduel slots straight into existing pipelines.
 
 ---
 
 ## License
 
-[MIT](LICENSE) 
+[MIT](LICENSE)
