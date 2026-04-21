@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -106,6 +107,19 @@ type Config struct {
 	// RPCOptions controls the underlying RPC client behavior (timeout,
 	// retries, headers, ...). When zero-valued, sensible defaults are used.
 	RPCOptions rpc.Options
+
+	// StateFile, when non-empty, enables periodic checkpointing of replay
+	// progress to this path so an interrupted run can be resumed via Resume.
+	StateFile string
+	// Resume, when true and StateFile points to an existing file, loads
+	// previously-completed task keys + counters and continues from there.
+	Resume bool
+	// StateInterval is the number of completed tasks between state flushes.
+	// Defaults to 100 when <= 0.
+	StateInterval int
+	// DatasetPath is recorded in the state file (informational only) so
+	// resumes against the wrong dataset can be flagged.
+	DatasetPath string
 }
 
 // Run executes the full replay suite against ds using concurrency goroutines.
@@ -249,38 +263,107 @@ func Run(ctx context.Context, ds *dataset.Dataset, cfg Config, concurrency int, 
 	}
 
 	taskCh := make(chan rpcTask, len(tasks))
+	skipped := 0
+	resume := cfg.Resume && cfg.StateFile != ""
+	var seed *State
+	if resume {
+		s, err := LoadState(cfg.StateFile)
+		if err == nil {
+			seed = s
+			if s.EndpointA != "" && (s.EndpointA != cfg.EndpointA || s.EndpointB != cfg.EndpointB) {
+				return nil, fmt.Errorf("resume: state was for endpoints (%s,%s) but current run uses (%s,%s)",
+					s.EndpointA, s.EndpointB, cfg.EndpointA, cfg.EndpointB)
+			}
+		} else if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("resume: load state: %w", err)
+		}
+	}
+	if seed == nil {
+		seed = &State{
+			EndpointA:   cfg.EndpointA,
+			EndpointB:   cfg.EndpointB,
+			DatasetPath: cfg.DatasetPath,
+		}
+	} else {
+		// Pre-populate counters/diffs into the result.
+		result.TotalRequests = seed.TotalRequests
+		result.SuccessRequests = seed.SuccessRequests
+		result.Unsupported = seed.Unsupported
+		result.Diffs = append(result.Diffs, seed.Diffs...)
+	}
+	recorder := newStateRecorder(cfg.StateFile, seed)
+
+	enqueued := 0
 	for _, t := range tasks {
+		key, _ := taskKey(t.method, t.params)
+		if recorder.isDone(key) {
+			skipped++
+			continue
+		}
 		taskCh <- t
+		enqueued++
 	}
 	close(taskCh)
+	if resume && progress != nil {
+		fmt.Fprintf(progress, "Resume: skipping %d already-completed tasks; running %d remaining\n", skipped, enqueued)
+	}
 
-	outCh := make(chan callOutcome, concurrency)
+	type workItem struct {
+		t   rpcTask
+		key string
+	}
+	workCh := make(chan workItem, concurrency)
+	go func() {
+		defer close(workCh)
+		for t := range taskCh {
+			key, _ := taskKey(t.method, t.params)
+			workCh <- workItem{t: t, key: key}
+		}
+	}()
+
+	type doneItem struct {
+		key string
+		out callOutcome
+	}
+	resCh := make(chan doneItem, concurrency)
 
 	var wg sync.WaitGroup
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for t := range taskCh {
-				outCh <- callAndDiff(ctx, cA, cB, t.method, t.params, cfg.DiffOpts, t.cat)
+			for w := range workCh {
+				resCh <- doneItem{key: w.key, out: callAndDiff(ctx, cA, cB, w.t.method, w.t.params, cfg.DiffOpts, w.t.cat)}
 			}
 		}()
 	}
 
 	go func() {
 		wg.Wait()
-		close(outCh)
+		close(resCh)
 	}()
 
-	total := len(tasks)
+	flushEvery := cfg.StateInterval
+	if flushEvery <= 0 {
+		flushEvery = 100
+	}
+
+	total := enqueued
 	done := 0
-	for out := range outCh {
+	for di := range resCh {
 		done++
+		out := di.out
 		result.TotalRequests += out.totalReqs
 		result.SuccessRequests += out.successReqs
 		result.Unsupported += out.unsupported
 		if out.diff != nil {
 			result.Diffs = append(result.Diffs, *out.diff)
+		}
+		recorder.record(di.key, out)
+		if recorder.shouldFlush(flushEvery) {
+			if err := recorder.flush(); err != nil {
+				slogWarnState(progress, err)
+			}
 		}
 		if progress != nil && total > 0 && (done == total || (done > 0 && done%progressInterval == 0)) {
 			pct := float64(done) / float64(total) * 100
@@ -288,7 +371,20 @@ func Run(ctx context.Context, ds *dataset.Dataset, cfg Config, concurrency int, 
 		}
 	}
 
+	// Final flush so a clean run leaves the state file consistent.
+	if err := recorder.flush(); err != nil {
+		slogWarnState(progress, err)
+	}
+
 	return result, nil
+}
+
+// slogWarnState reports a state-flush failure non-fatally. We prefer the
+// progress writer for visibility; in production this is os.Stderr.
+func slogWarnState(progress io.Writer, err error) {
+	if progress != nil {
+		fmt.Fprintf(progress, "warning: state flush failed: %v\n", err)
+	}
 }
 
 func (c Config) enabled(target string) bool {

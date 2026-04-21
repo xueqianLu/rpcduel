@@ -47,6 +47,28 @@ rpcduel dataset \
 * Output is **deterministically ordered**: accounts by tx count (desc), blocks by number (desc), transactions by block number (asc).
 * Network errors and timeouts are logged as warnings; already-collected data is saved regardless.
 
+## Inspect a dataset file
+
+Once you have a `dataset.json`, use `dataset inspect` to see what's in
+it before piping to `replay` or `benchgen`:
+
+```bash
+rpcduel dataset inspect dataset.json
+rpcduel dataset inspect dataset.json --json
+```
+
+The text output includes:
+
+- meta (chain, source RPC, generation timestamp, schema version)
+- block range and counts (accounts / unique tx hashes / blocks)
+- top-10 accounts by transaction count
+- a tx-per-account distribution histogram
+- estimated RPC call counts per replay/benchgen category, useful for
+  budgeting how long a downstream `replay` or `bench` will take
+
+`--json` emits the same data as a stable JSON document — safe to feed
+to `jq` or assert against in CI.
+
 ## See also
 
 * [Dataset file format](/reference/dataset-format)

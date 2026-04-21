@@ -6,6 +6,9 @@ import (
 	"log/slog"
 	"math/rand"
 	"os"
+	"os/signal"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -48,6 +51,9 @@ var (
 	benchTP95        float64
 	benchTP99        float64
 	benchTErrorRate  float64
+	benchStateFile   string
+	benchResume      bool
+	benchStateEvery  int
 )
 
 func init() {
@@ -68,6 +74,9 @@ func init() {
 	benchCmd.Flags().Float64Var(&benchTP95, "max-p95-ms", 0, "Fail (exit 2) if any endpoint's P95 latency exceeds this many ms")
 	benchCmd.Flags().Float64Var(&benchTP99, "max-p99-ms", 0, "Fail (exit 2) if any endpoint's P99 latency exceeds this many ms")
 	benchCmd.Flags().Float64Var(&benchTErrorRate, "max-error-rate", 0, "Fail (exit 2) if any endpoint's error rate exceeds this fraction (0..1)")
+	benchCmd.Flags().StringVar(&benchStateFile, "state-file", "", "Path to a state file used for crash-resume (single-method --requests N mode only)")
+	benchCmd.Flags().BoolVar(&benchResume, "resume", false, "Resume a previous run from --state-file")
+	benchCmd.Flags().IntVar(&benchStateEvery, "state-interval", 200, "Flush the state file every N completed requests")
 }
 
 // fillBenchDefaults applies the bench: section of the loaded config to
@@ -110,6 +119,14 @@ func fillBenchDefaults(cmd *cobra.Command) {
 	}
 }
 
+// closedResultChannel returns a closed runner.Result channel for branches
+// that have nothing to dispatch (e.g. a fully-completed resume).
+func closedResultChannel() <-chan runner.Result {
+	c := make(chan runner.Result)
+	close(c)
+	return c
+}
+
 // scenarioLabel returns tag if non-empty, otherwise the fallback (e.g. method
 // name). Used as the "scenario" label for Prometheus metrics.
 func scenarioLabel(tag, fallback string) string {
@@ -129,12 +146,19 @@ func runBench(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("at least one --rpc endpoint is required")
 	}
 
-	ctx := runnerContext(context.Background())
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	ctx = runnerContext(ctx)
 	outFmt := report.Format(benchOutput)
+
+	resumeEnabled := benchStateFile != "" && benchInputFile == "" && benchDuration == 0
+	if (benchStateFile != "" || benchResume) && !resumeEnabled {
+		return fmt.Errorf("--state-file/--resume only support single-method --requests N mode (no --input, no --duration)")
+	}
 
 	startTime := time.Now()
 	warmupEnd := startTime.Add(benchWarmup)
-	if benchWarmup > 0 {
+	if benchWarmup > 0 && !benchResume {
 		slog.Info("warmup phase started", "duration", benchWarmup)
 	}
 
@@ -143,6 +167,65 @@ func runBench(cmd *cobra.Command, args []string) error {
 	metricsMap := make(map[string]*bench.Metrics)
 	for _, ep := range benchRPCs {
 		metricsMap[ep] = bench.NewMetricsAt(ep, warmupEnd)
+	}
+
+	var (
+		stateLoaded     *bench.State
+		alreadyDone     int
+		stateFlushMu    sync.Mutex
+		flushBenchState = func() {}
+	)
+
+	if resumeEnabled {
+		params, err := rpc.ParseParams(benchParamsStr)
+		if err != nil {
+			return err
+		}
+		_ = params // will be re-parsed below; just validating shape early
+		if benchResume {
+			s, err := bench.LoadState(benchStateFile)
+			if err == nil {
+				stateLoaded = s
+				if s.Method != "" && s.Method != benchMethod {
+					return fmt.Errorf("resume: state was for method %q, current run uses %q", s.Method, benchMethod)
+				}
+				if s.ParamsJSON != "" && s.ParamsJSON != benchParamsStr {
+					return fmt.Errorf("resume: state params %q != current %q", s.ParamsJSON, benchParamsStr)
+				}
+				for _, es := range s.Per {
+					m := metricsMap[es.Endpoint]
+					if m == nil {
+						m = bench.NewMetricsAt(es.Endpoint, warmupEnd)
+						metricsMap[es.Endpoint] = m
+					}
+					m.RestoreFromSnapshot(es)
+					alreadyDone += es.Total
+				}
+				benchWarmup = 0 // skip warmup on resume
+				slog.Info("resume: state loaded", "completed", alreadyDone)
+			} else if !os.IsNotExist(err) {
+				return fmt.Errorf("resume: load state: %w", err)
+			}
+		}
+		flushBenchState = func() {
+			stateFlushMu.Lock()
+			defer stateFlushMu.Unlock()
+			st := &bench.State{
+				Mode:        "requests-single-method",
+				Method:      benchMethod,
+				ParamsJSON:  benchParamsStr,
+				Endpoints:   append([]string{}, benchRPCs...),
+				TargetTotal: benchRequests,
+			}
+			for _, ep := range benchRPCs {
+				if m := metricsMap[ep]; m != nil {
+					st.Per = append(st.Per, m.Snapshot())
+				}
+			}
+			if err := bench.SaveState(benchStateFile, st); err != nil {
+				slog.Warn("bench state flush failed", "err", err)
+			}
+		}
 	}
 
 	record := func(res runner.Result, fallbackScenario string) {
@@ -238,13 +321,33 @@ func runBench(cmd *cobra.Command, args []string) error {
 			if benchRequests <= 0 {
 				benchRequests = 100
 			}
-			resultCh = runner.RunN(ctx, benchRPCs, benchMethod, params,
-				benchConcurrency, benchRequests, benchTimeout)
+			remaining := benchRequests - alreadyDone
+			if remaining <= 0 {
+				slog.Info("resume: target already reached, nothing to do",
+					"target", benchRequests, "completed", alreadyDone)
+				resultCh = closedResultChannel()
+			} else {
+				resultCh = runner.RunN(ctx, benchRPCs, benchMethod, params,
+					benchConcurrency, remaining, benchTimeout)
+			}
 		}
 
+		flushEvery := benchStateEvery
+		if flushEvery <= 0 {
+			flushEvery = 200
+		}
+		recv := 0
 		for res := range resultCh {
 			record(res, benchMethod)
+			recv++
+			if resumeEnabled && recv%flushEvery == 0 {
+				flushBenchState()
+			}
 		}
+		if resumeEnabled {
+			flushBenchState()
+		}
+		_ = stateLoaded
 	}
 
 	var summaries []bench.Summary

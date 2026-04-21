@@ -92,6 +92,8 @@ export default defineConfig({
             { text: 'dataset', link: '/data-driven/dataset' },
             { text: 'replay', link: '/data-driven/replay' },
             { text: 'benchgen', link: '/data-driven/benchgen' },
+            { text: 'record (one-shot)', link: '/data-driven/record' },
+            { text: 'Resuming long runs', link: '/data-driven/resume' },
           ],
         },
         {

@@ -132,6 +132,7 @@ func init() {
 	rootCmd.AddCommand(datasetCmd)
 	rootCmd.AddCommand(diffTestCmd)
 	rootCmd.AddCommand(benchgenCmd)
+	rootCmd.AddCommand(recordCmd)
 	rootCmd.AddCommand(doctorCmd)
 }
 

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `rpcduel record` — one-shot capture from a live endpoint into a
+  bench scenario file, bridging `dataset` → `benchgen` into a single
+  command. Supports `--methods` whitelist and per-scenario `--sample`
+  fraction so the resulting `bench.json` is small enough to commit.
+- `rpcduel dataset inspect <file>` — print a summary of a captured
+  dataset (counts, block range, top-10 accounts, tx-per-account
+  buckets, estimated request counts per replay/benchgen category).
+  `--json` for machine-readable output.
+- `--state-file` / `--resume` for `rpcduel replay` — periodic
+  checkpoint of completed task keys + counters + diffs (every
+  `--state-interval` tasks and on Ctrl+C). Resuming skips
+  already-completed task keys via the canonical `(method, params)`
+  hash, so interrupted long-running replays can be safely continued.
+- `--state-file` / `--resume` for `rpcduel bench` (single-method
+  `--requests N` mode only). Persists per-endpoint HDR snapshot,
+  totals, errors, and start time. Resume continues with the remaining
+  request count and merges into the existing histogram.
+
 ## [0.2.0] - 2026-04-21
 
 ### Added

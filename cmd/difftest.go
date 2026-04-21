@@ -6,6 +6,8 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -47,6 +49,9 @@ var (
 	diffTestTMismatchRate    float64
 	diffTestTErrorRate       float64
 	diffTestTMaxMismatch     int
+	diffTestStateFile        string
+	diffTestResume           bool
+	diffTestStateInterval    int
 )
 
 func init() {
@@ -73,6 +78,9 @@ func init() {
 	diffTestCmd.Flags().Float64Var(&diffTestTMismatchRate, "max-mismatch-rate", 0, "Fail (exit 2) if mismatch rate exceeds this fraction (0..1)")
 	diffTestCmd.Flags().Float64Var(&diffTestTErrorRate, "max-error-rate", 0, "Fail (exit 2) if RPC error rate exceeds this fraction (0..1)")
 	diffTestCmd.Flags().IntVar(&diffTestTMaxMismatch, "max-mismatch", 0, "Fail (exit 2) if more than this many mismatches are observed")
+	diffTestCmd.Flags().StringVar(&diffTestStateFile, "state-file", "", "Path to a state file used for crash-resume; written periodically and on Ctrl+C")
+	diffTestCmd.Flags().BoolVar(&diffTestResume, "resume", false, "Resume a previous run from --state-file (skips already-completed task keys)")
+	diffTestCmd.Flags().IntVar(&diffTestStateInterval, "state-interval", 100, "Flush the state file every N completed tasks")
 }
 
 // fillReplayDefaults applies the replay: section of the loaded config.
@@ -149,7 +157,8 @@ func runDiffTest(cmd *cobra.Command, args []string) error {
 		"transactions", len(ds.Transactions),
 		"blocks", len(ds.Blocks))
 
-	ctx := context.Background()
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 	result, err := replay.Run(ctx, ds, replay.Config{
 		EndpointA:        diffTestRPCs[0],
 		EndpointB:        diffTestRPCs[1],
@@ -159,6 +168,10 @@ func runDiffTest(cmd *cobra.Command, args []string) error {
 		TraceBlock:       diffTestTraceBlock,
 		Only:             only,
 		RPCOptions:       rpcOptions(diffTestTimeout),
+		StateFile:        diffTestStateFile,
+		Resume:           diffTestResume,
+		StateInterval:    diffTestStateInterval,
+		DatasetPath:      diffTestDataset,
 	}, diffTestConcurrency, os.Stderr)
 	if err != nil {
 		return fmt.Errorf("replay: %w", err)

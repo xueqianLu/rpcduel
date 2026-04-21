@@ -48,6 +48,40 @@ func init() {
 	datasetCmd.Flags().StringVar(&datasetChain, "chain", "ethereum", "Chain name recorded in the dataset")
 	datasetCmd.Flags().IntVar(&datasetConcurrency, "concurrency", 4, "Number of goroutines used to fetch blocks from the RPC endpoint")
 	datasetCmd.Flags().BoolVar(&datasetAppend, "append", false, "Append to an existing --out dataset: scan only the delta range (last-collected+1 to head by default) and merge results")
+
+	datasetCmd.AddCommand(datasetInspectCmd)
+}
+
+var datasetInspectJSON bool
+
+var datasetInspectCmd = &cobra.Command{
+	Use:   "inspect <file>",
+	Short: "Print summary statistics for a dataset file",
+	Long: `Read a dataset JSON file and print metadata, counts, top accounts,
+the tx-per-account distribution, and the estimated number of RPC calls each
+replay/benchgen category would issue against it.
+
+Use --json for machine-readable output.`,
+	Args: cobra.ExactArgs(1),
+	RunE: runDatasetInspect,
+}
+
+func init() {
+	datasetInspectCmd.Flags().BoolVar(&datasetInspectJSON, "json", false, "Emit JSON instead of human-readable text")
+}
+
+func runDatasetInspect(_ *cobra.Command, args []string) error {
+	path := args[0]
+	ds, err := dataset.Load(path)
+	if err != nil {
+		return err
+	}
+	stats := dataset.Inspect(path, ds)
+	if datasetInspectJSON {
+		return dataset.PrintStatsJSON(os.Stdout, stats)
+	}
+	dataset.PrintStats(os.Stdout, stats)
+	return nil
 }
 
 // defaultFromBlockMultiplier is used when --from-block is not specified: we look
