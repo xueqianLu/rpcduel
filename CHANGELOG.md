@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `rpcduel contract` — new top-level command grouping read-only helpers
+  for well-known standard contracts:
+  - `contract erc20 {info|balance|allowance}` (with `bytes32` fallback
+    for legacy tokens like MKR/SAI).
+  - `contract erc721 {info|owner|tokenURI}` (Enumerable `totalSupply`
+    is reported as a soft error when the contract does not implement
+    it).
+  - `contract storage <address> <slot>` and `contract code <address>`
+    for generic on-chain inspection.
+  - All subcommands accept `--rpc`, `--block`, `--output text|json`,
+    and `--timeout`. For arbitrary `eth_call` invocations continue to
+    use `rpcduel call`.
 - `rpcduel record` — one-shot capture from a live endpoint into a
   bench scenario file, bridging `dataset` → `benchgen` into a single
   command. Supports `--methods` whitelist and per-scenario `--sample`

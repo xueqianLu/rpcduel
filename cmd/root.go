@@ -137,6 +137,7 @@ func init() {
 	rootCmd.AddCommand(benchgenCmd)
 	rootCmd.AddCommand(recordCmd)
 	rootCmd.AddCommand(doctorCmd)
+	rootCmd.AddCommand(contractCmd)
 }
 
 // runnerContext returns a context wired with the runner-side options derived

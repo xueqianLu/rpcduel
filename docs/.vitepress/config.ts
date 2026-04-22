@@ -71,6 +71,7 @@ export default defineConfig({
           text: 'Basic Commands',
           items: [
             { text: 'call', link: '/commands/call' },
+            { text: 'contract', link: '/commands/contract' },
             { text: 'diff', link: '/commands/diff' },
             { text: 'bench', link: '/commands/bench' },
             { text: 'duel', link: '/commands/duel' },
