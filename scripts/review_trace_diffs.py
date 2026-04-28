@@ -36,6 +36,7 @@ import os
 import re
 import shutil
 import sys
+import urllib.error
 import urllib.request
 from typing import Any, Iterable
 
@@ -104,11 +105,27 @@ def rpc_call(url: str, method: str, params: list, timeout: float) -> Any:
         url, data=body,
         headers={"content-type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        payload = json.loads(resp.read())
-    if "error" in payload and payload["error"] is not None:
+    raw: bytes
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as e:
+        # JSON-RPC servers often return non-2xx with an error body — read it.
+        try:
+            raw = e.read()
+        except Exception:
+            raw = b""
+        if not raw:
+            return {"__http_error__": f"HTTP {e.code} {e.reason}"}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return {"__http_error__": raw.decode("utf-8", "replace")[:2000]}
+    if isinstance(payload, dict) and payload.get("error") is not None:
         return {"__rpc_error__": payload["error"]}
-    return payload.get("result")
+    if isinstance(payload, dict):
+        return payload.get("result")
+    return payload
 
 
 # ---------- Side-by-side render ----------------------------------------------
