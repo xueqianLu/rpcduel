@@ -21,6 +21,8 @@ rpcduel benchgen [flags]
 | `--timeout` | `30s` | Per-request timeout |
 | `--trace-transaction` | `false` | Include `debug_traceTransaction` scenario |
 | `--trace-block` | `false` | Include `debug_traceBlockByNumber` scenario |
+| `--tracer` | `callTracer` | Tracer name passed to `debug_trace*` (e.g. `callTracer`, `prestateTracer`, `4byteTracer`, `noopTracer`, `muxTracer`, `flatCallTracer`). Use `default` to keep the node's built-in `structLogger`. |
+| `--tracer-config` | _(none)_ | JSON object placed under `tracerConfig`, e.g. `'{"onlyTopCall":true}'` (callTracer) or `'{"diffMode":true}'` (prestateTracer). |
 | `--only` | | Only include selected scenario groups |
 | `--out` | | Write the generated bench scenario file to this path |
 | `--output` | `text` | `text` or `json` for the stdout summary |

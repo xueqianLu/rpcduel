@@ -35,6 +35,8 @@ for the same transaction or block are **not** considered duplicates, so
 | `--max-tx-per-account` | `100` | Max transactions tested per account (0 = unlimited) |
 | `--trace-transaction` | `false` | Also compare `debug_traceTransaction` |
 | `--trace-block` | `false` | Also compare `debug_traceBlockByNumber` |
+| `--tracer` | `callTracer` | Tracer name passed to `debug_trace*` (e.g. `callTracer`, `prestateTracer`, `4byteTracer`, `noopTracer`, `muxTracer`, `flatCallTracer`). Use `default` to keep the node's built-in `structLogger`. |
+| `--tracer-config` | _(none)_ | JSON object placed under `tracerConfig`, e.g. `'{"onlyTopCall":true}'` or `'{"diffMode":true}'`. |
 | `--only` | | Only run selected targets, e.g. `balance`, `transaction`, `block`, `trace` |
 | `--concurrency` | `4` | Number of goroutines used to execute RPC calls |
 | `--ignore-field` | | Field name(s) to skip in comparison |

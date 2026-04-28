@@ -31,6 +31,7 @@ rpcduel bench --input bench.json --rpc https://rpc.a --rpc https://rpc.b \
 | `--methods` | _all_ | Comma-separated RPC method whitelist |
 | `--sample` | `1.0` | Per-scenario downsample fraction (0..1) |
 | `--trace-transaction` / `--trace-block` | `false` | Include trace methods in the scenarios |
+| `--tracer` / `--tracer-config` | `callTracer` / _(none)_ | Tracer to pass to `debug_trace*`. Use `--tracer default` for the node's built-in `structLogger`. |
 | `--concurrency` | (chain default) | Goroutines used for the scan |
 | `--seed` | `42` | RNG seed for reproducible sampling |
 | `--chain` | (auto) | Chain hint (informational) |

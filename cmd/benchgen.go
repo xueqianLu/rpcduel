@@ -18,6 +18,7 @@ import (
 	"github.com/xueqianLu/rpcduel/internal/dataset"
 	"github.com/xueqianLu/rpcduel/internal/report"
 	"github.com/xueqianLu/rpcduel/internal/runner"
+	"github.com/xueqianLu/rpcduel/internal/tracerflag"
 )
 
 var benchgenCmd = &cobra.Command{
@@ -48,6 +49,8 @@ var (
 	benchgenTimeout     time.Duration
 	benchgenTraceTx     bool
 	benchgenTraceBlock  bool
+	benchgenTracer      string
+	benchgenTracerCfg   string
 	benchgenOnly        []string
 	benchgenOut         string
 	benchgenCSV         string
@@ -63,6 +66,8 @@ func init() {
 	benchgenCmd.Flags().DurationVar(&benchgenTimeout, "timeout", 30*time.Second, "Per-request timeout")
 	benchgenCmd.Flags().BoolVar(&benchgenTraceTx, "trace-transaction", false, "Include debug_traceTransaction scenarios")
 	benchgenCmd.Flags().BoolVar(&benchgenTraceBlock, "trace-block", false, "Include debug_traceBlockByNumber scenarios")
+	benchgenCmd.Flags().StringVar(&benchgenTracer, "tracer", tracerflag.Default, tracerflag.FlagUsage())
+	benchgenCmd.Flags().StringVar(&benchgenTracerCfg, "tracer-config", "", tracerflag.ConfigFlagUsage())
 	benchgenCmd.Flags().StringSliceVar(&benchgenOnly, "only", nil,
 		"Only include selected scenario groups (e.g. balance,transaction,block,logs,mixed_balance,trace)")
 	benchgenCmd.Flags().StringVar(&benchgenOut, "out", "", "Write the generated bench scenario file to this path")
@@ -84,6 +89,10 @@ func runBenchgen(_ *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
+	tracerCfg, err := tracerflag.Build(benchgenTracer, benchgenTracerCfg)
+	if err != nil {
+		return err
+	}
 
 	ds, err := dataset.Load(benchgenDataset)
 	if err != nil {
@@ -94,6 +103,7 @@ func runBenchgen(_ *cobra.Command, _ []string) error {
 		TraceTransaction: benchgenTraceTx,
 		TraceBlock:       benchgenTraceBlock,
 		Only:             only,
+		TracerConfig:     tracerCfg,
 	})
 
 	if benchgenOut != "" {

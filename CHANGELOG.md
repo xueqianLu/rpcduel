@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `--tracer` / `--tracer-config` flags for `rpcduel benchgen`, `rpcduel
+  replay`, and `rpcduel record`. The default tracer for the
+  `debug_trace*` family is now `callTracer` (the de-facto standard used
+  by indexers, explorers and audit tooling) instead of the node's
+  built-in `structLogger`. Pass `--tracer default` to restore the
+  pre-flag behaviour. `--tracer-config` accepts a raw JSON object,
+  e.g. `--tracer prestateTracer --tracer-config '{"diffMode":true}'`
+  for state-diff mode.
 - `rpcduel contract` — new top-level command grouping read-only helpers
   for well-known standard contracts:
   - `contract erc20 {info|balance|allowance}` (with `bytes32` fallback

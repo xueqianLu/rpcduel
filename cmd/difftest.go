@@ -21,6 +21,7 @@ import (
 	"github.com/xueqianLu/rpcduel/internal/replay"
 	"github.com/xueqianLu/rpcduel/internal/report"
 	"github.com/xueqianLu/rpcduel/internal/thresholds"
+	"github.com/xueqianLu/rpcduel/internal/tracerflag"
 )
 
 var diffTestCmd = &cobra.Command{
@@ -39,6 +40,8 @@ var (
 	diffTestMaxTxPerAccount  int
 	diffTestTraceTransaction bool
 	diffTestTraceBlock       bool
+	diffTestTracer           string
+	diffTestTracerCfg        string
 	diffTestOnly             []string
 	diffTestOutput           string
 	diffTestIgnoreFields     []string
@@ -66,6 +69,8 @@ func init() {
 		"Also compare debug_traceTransaction for dataset transactions")
 	diffTestCmd.Flags().BoolVar(&diffTestTraceBlock, "trace-block", false,
 		"Also compare debug_traceBlockByNumber for dataset blocks")
+	diffTestCmd.Flags().StringVar(&diffTestTracer, "tracer", tracerflag.Default, tracerflag.FlagUsage())
+	diffTestCmd.Flags().StringVar(&diffTestTracerCfg, "tracer-config", "", tracerflag.ConfigFlagUsage())
 	diffTestCmd.Flags().StringSliceVar(&diffTestOnly, "only", nil,
 		"Only run selected replay targets (e.g. balance,transaction,block,trace,trace_transaction,trace_block)")
 	diffTestCmd.Flags().StringVar(&diffTestOutput, "output", "text", "Output format: text or json")
@@ -144,6 +149,10 @@ func runDiffTest(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	tracerCfg, err := tracerflag.Build(diffTestTracer, diffTestTracerCfg)
+	if err != nil {
+		return err
+	}
 
 	ds, err := dataset.Load(diffTestDataset)
 	if err != nil {
@@ -169,6 +178,7 @@ func runDiffTest(cmd *cobra.Command, args []string) error {
 		DiffOpts:         opts,
 		TraceTransaction: diffTestTraceTransaction,
 		TraceBlock:       diffTestTraceBlock,
+		TracerConfig:     tracerCfg,
 		Only:             only,
 		RPCOptions:       rpcOptions(diffTestTimeout),
 		StateFile:        diffTestStateFile,

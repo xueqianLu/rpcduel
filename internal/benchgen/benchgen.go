@@ -20,6 +20,10 @@ type Options struct {
 	TraceTransaction bool
 	TraceBlock       bool
 	Only             map[string]bool
+	// TracerConfig is the second argument passed to debug_traceTransaction
+	// and debug_traceBlockByNumber. When nil, an empty map (== node default
+	// tracer) is sent. Build it with internal/tracerflag.
+	TracerConfig map[string]interface{}
 }
 
 // Request is a single JSON-RPC request in a scenario.
@@ -319,7 +323,7 @@ func GenerateWithOptions(ds *dataset.Dataset, rng *rand.Rand, opts Options) *Ben
 			for _, tx := range ds.Transactions {
 				s.Requests = append(s.Requests, Request{
 					Method: "debug_traceTransaction",
-					Params: []interface{}{tx.Hash, map[string]interface{}{}},
+					Params: []interface{}{tx.Hash, opts.tracerCfg()},
 				})
 			}
 			if len(s.Requests) > 0 {
@@ -335,7 +339,7 @@ func GenerateWithOptions(ds *dataset.Dataset, rng *rand.Rand, opts Options) *Ben
 			for _, b := range ds.Blocks {
 				s.Requests = append(s.Requests, Request{
 					Method: "debug_traceBlockByNumber",
-					Params: []interface{}{fmt.Sprintf("0x%x", b.Number), map[string]interface{}{}},
+					Params: []interface{}{fmt.Sprintf("0x%x", b.Number), opts.tracerCfg()},
 				})
 			}
 			if len(s.Requests) > 0 {
@@ -459,4 +463,14 @@ func (o Options) enabled(target string) bool {
 	default:
 		return true
 	}
+}
+
+// tracerCfg returns the second argument for debug_trace* methods. When
+// no tracer was configured we send an empty object so the node uses its
+// built-in default tracer (preserves pre-flag behaviour).
+func (o Options) tracerCfg() map[string]interface{} {
+	if o.TracerConfig == nil {
+		return map[string]interface{}{}
+	}
+	return o.TracerConfig
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/xueqianLu/rpcduel/internal/benchgen"
 	"github.com/xueqianLu/rpcduel/internal/dataset"
+	"github.com/xueqianLu/rpcduel/internal/tracerflag"
 )
 
 var recordCmd = &cobra.Command{
@@ -44,6 +45,8 @@ var (
 	recordSample      float64
 	recordTraceTx     bool
 	recordTraceBlock  bool
+	recordTracer      string
+	recordTracerCfg   string
 	recordConcurrency int
 	recordSeed        int64
 	recordChain       string
@@ -64,6 +67,8 @@ func init() {
 	f.Float64Var(&recordSample, "sample", 1.0, "Per-scenario sampling fraction in (0,1]. 1.0 = keep everything.")
 	f.BoolVar(&recordTraceTx, "trace-transaction", false, "Include debug_traceTransaction scenarios")
 	f.BoolVar(&recordTraceBlock, "trace-block", false, "Include debug_traceBlockByNumber scenarios")
+	f.StringVar(&recordTracer, "tracer", tracerflag.Default, tracerflag.FlagUsage())
+	f.StringVar(&recordTracerCfg, "tracer-config", "", tracerflag.ConfigFlagUsage())
 	f.IntVar(&recordConcurrency, "concurrency", 4, "Goroutines used to fetch blocks")
 	f.Int64Var(&recordSeed, "seed", 42, "Seed for deterministic sampling")
 	f.StringVar(&recordChain, "chain", "ethereum", "Chain name recorded in dataset metadata")
@@ -125,9 +130,14 @@ func runRecord(_ *cobra.Command, _ []string) error {
 	}
 
 	rng := rand.New(rand.NewSource(recordSeed))
+	tracerCfg, err := tracerflag.Build(recordTracer, recordTracerCfg)
+	if err != nil {
+		return err
+	}
 	bf := benchgen.GenerateWithOptions(ds, rng, benchgen.Options{
 		TraceTransaction: recordTraceTx,
 		TraceBlock:       recordTraceBlock,
+		TracerConfig:     tracerCfg,
 	})
 	bf = benchgen.FilterMethods(bf, recordMethods)
 	bf = benchgen.Sample(bf, recordSample, rng)

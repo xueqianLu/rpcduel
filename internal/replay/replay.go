@@ -107,6 +107,10 @@ type Config struct {
 	TraceTransaction bool
 	TraceBlock       bool
 	Only             map[string]bool
+	// TracerConfig is the second argument passed to debug_traceTransaction
+	// and debug_traceBlockByNumber. Nil → empty object (node default tracer).
+	// Build it via internal/tracerflag.
+	TracerConfig map[string]interface{}
 	// RPCOptions controls the underlying RPC client behavior (timeout,
 	// retries, headers, ...). When zero-valued, sensible defaults are used.
 	RPCOptions rpc.Options
@@ -250,7 +254,7 @@ func Run(ctx context.Context, ds *dataset.Dataset, cfg Config, concurrency int, 
 			addTask("eth_getTransactionReceipt", params, CategoryReceipt)
 		}
 		if cfg.enabled("trace_transaction") {
-			addTask("debug_traceTransaction", []interface{}{tx.Hash, map[string]interface{}{}}, CategoryTrace)
+			addTask("debug_traceTransaction", []interface{}{tx.Hash, cfg.tracerCfg()}, CategoryTrace)
 		}
 	}
 
@@ -261,7 +265,7 @@ func Run(ctx context.Context, ds *dataset.Dataset, cfg Config, concurrency int, 
 			addTask("eth_getBlockByNumber", []interface{}{hexNumber, false}, CategoryBlock)
 		}
 		if cfg.enabled("trace_block") {
-			addTask("debug_traceBlockByNumber", []interface{}{hexNumber, map[string]interface{}{}}, CategoryTrace)
+			addTask("debug_traceBlockByNumber", []interface{}{hexNumber, cfg.tracerCfg()}, CategoryTrace)
 		}
 	}
 
@@ -402,6 +406,15 @@ func (c Config) enabled(target string) bool {
 	default:
 		return true
 	}
+}
+
+// tracerCfg returns the second argument for debug_trace* methods; nil
+// → empty object, i.e. node-default tracer.
+func (c Config) tracerCfg() map[string]interface{} {
+	if c.TracerConfig == nil {
+		return map[string]interface{}{}
+	}
+	return c.TracerConfig
 }
 
 // callOutcome carries the counters and optional diff produced by one RPC pair.
