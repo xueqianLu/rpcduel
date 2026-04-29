@@ -67,6 +67,45 @@ def render(v) -> list[str]:
     return json.dumps(v, indent=2, ensure_ascii=False).splitlines() or [""]
 
 
+_INT_RE = __import__("re").compile(r"^-?(?:0[xX][0-9a-fA-F]+|0[oO][0-7]+|0[bB][01]+|\d+)$")
+
+
+def _canon_scalar(v):
+    """Map equivalent numeric representations to a canonical form.
+
+    Examples (all become int 100):
+        100        -> 100
+        "100"      -> 100
+        "0x64"     -> 100
+        "0o144"    -> 100
+
+    Floats, booleans, None, and non-numeric strings are returned unchanged.
+    Ints are returned as-is (so JSON dumps render them identically across
+    both sides). The canonical form is only used to detect equivalence, not
+    to render output, so users still see the original values."""
+    if isinstance(v, bool) or v is None:
+        return v
+    if isinstance(v, int):
+        return v
+    if isinstance(v, str):
+        s = v.strip()
+        if _INT_RE.match(s):
+            try:
+                return int(s, 0)
+            except ValueError:
+                return v
+        return v
+    return v
+
+
+def canon(v):
+    if isinstance(v, dict):
+        return {k: canon(v[k]) for k in v}
+    if isinstance(v, list):
+        return [canon(x) for x in v]
+    return _canon_scalar(v)
+
+
 def hpad(s: str, w: int) -> str:
     if len(s) >= w:
         return s[: w - 1] + "…"
@@ -84,9 +123,9 @@ def print_header(label_a: str, label_b: str, col: int) -> None:
     print(dim("-" * col) + sep + dim("-" * col))
 
 
-def print_row(la: str, lb: str, col: int) -> None:
+def print_row(la: str, lb: str, col: int, diff: bool) -> None:
     sep = dim(" | ")
-    if la == lb:
+    if not diff:
         print("  " + hpad(la, col) + sep + hpad(lb, col))
     else:
         print(dim("≠ ") + blue(hpad(la, col)) + sep + red(hpad(lb, col)))
@@ -118,10 +157,15 @@ def main() -> int:
 
     la_lines = render(a)
     lb_lines = render(b)
+    # Canonicalised lines are only used to decide which lines count as
+    # different — display uses the original lines so users still see the
+    # original numeric representation (decimal, hex, quoted, ...).
+    ca_lines = render(canon(a))
+    cb_lines = render(canon(b))
     n = max(len(la_lines), len(lb_lines))
     diff_flags = [
-        (la_lines[i] if i < len(la_lines) else "") !=
-        (lb_lines[i] if i < len(lb_lines) else "")
+        (ca_lines[i] if i < len(ca_lines) else "") !=
+        (cb_lines[i] if i < len(cb_lines) else "")
         for i in range(n)
     ]
     diff_total = sum(diff_flags)
@@ -158,7 +202,7 @@ def main() -> int:
         for k in range(i, end):
             la = la_lines[k] if k < len(la_lines) else ""
             lb = lb_lines[k] if k < len(lb_lines) else ""
-            print_row(la, lb, col)
+            print_row(la, lb, col, diff_flags[k])
         i = end
 
         if show_all or i >= n:
