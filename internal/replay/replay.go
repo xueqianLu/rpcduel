@@ -295,8 +295,8 @@ func Run(ctx context.Context, ds *dataset.Dataset, cfg Config, concurrency int, 
 		}
 		if progress != nil {
 			fmt.Fprintf(progress,
-				"eth_call prep: %d txs -> ok=%d notfound=%d fetch_err=%d contract_create=%d parse_err=%d (%d eth_call tasks queued)\n",
-				stats.total, stats.ok, stats.notFound, stats.fetchErr, stats.contractCreate, stats.parseErr, stats.ok,
+				"eth_call prep: %d txs -> ok=%d notfound=%d fetch_err=%d rpc_err=%d contract_create=%d parse_err=%d (%d eth_call tasks queued)\n",
+				stats.total, stats.ok, stats.notFound, stats.fetchErr, stats.rpcErr, stats.contractCreate, stats.parseErr, stats.ok,
 			)
 		}
 	}
@@ -454,9 +454,10 @@ func (c Config) tracerCfg() map[string]interface{} {
 // ethCallPrepStats tracks the outcome of the per-tx pre-fetch step.
 type ethCallPrepStats struct {
 	total          int
-	ok             int // tx detail successfully fetched (incl. contract creations counted below)
+	ok             int
 	notFound       int // endpoint returned null (tx unknown to this node)
-	fetchErr       int // network/RPC error from endpoint
+	fetchErr       int // transport / HTTP / timeout error
+	rpcErr         int // JSON-RPC error response (e.g. method not found, rate limited)
 	contractCreate int // tx detail had no `to` field (skipped)
 	parseErr       int // tx detail JSON could not be unmarshalled
 }
@@ -467,6 +468,9 @@ type ethCallPrepStats struct {
 // many were dropped and why. Periodic progress is written to progress (if
 // non-nil) every 10000 fetches so a long pre-fetch over a million txs gives
 // the user some signal.
+//
+// Set RPCDUEL_PREP_VERBOSE=1 to print every single fetch error (very noisy
+// on large datasets — only use when triaging a few hundred txs).
 func prepareEthCallObjects(ctx context.Context, c *rpc.Client, txs []dataset.Transaction, concurrency int, progress io.Writer) (map[string]map[string]interface{}, ethCallPrepStats) {
 	if concurrency <= 0 {
 		concurrency = 1
@@ -474,14 +478,30 @@ func prepareEthCallObjects(ctx context.Context, c *rpc.Client, txs []dataset.Tra
 	out := make(map[string]map[string]interface{}, len(txs))
 	stats := ethCallPrepStats{total: len(txs)}
 	var (
-		mu       sync.Mutex
-		done     int
-		firstErr string
+		mu         sync.Mutex
+		done       int
+		sampleErrs = make(map[string]int) // distinct error msg -> count
 	)
-	const progressEvery = 10000
+	const (
+		progressEvery   = 10000
+		maxSampleDistinct = 8
+	)
+	verbose := os.Getenv("RPCDUEL_PREP_VERBOSE") == "1"
 
 	if progress != nil {
 		fmt.Fprintf(progress, "eth_call prep: pre-fetching tx details for %d transactions from --rpc[0]...\n", len(txs))
+	}
+
+	recordErr := func(kind, hash, msg string) {
+		if msg == "" {
+			msg = "(empty)"
+		}
+		if _, seen := sampleErrs[msg]; seen || len(sampleErrs) < maxSampleDistinct {
+			sampleErrs[msg]++
+		}
+		if verbose && progress != nil {
+			fmt.Fprintf(progress, "eth_call prep: %s tx=%s err=%s\n", kind, hash, msg)
+		}
 	}
 
 	sem := make(chan struct{}, concurrency)
@@ -503,19 +523,23 @@ func prepareEthCallObjects(ctx context.Context, c *rpc.Client, txs []dataset.Tra
 			defer mu.Unlock()
 			done++
 			if progress != nil && done%progressEvery == 0 {
-				fmt.Fprintf(progress, "eth_call prep: %d/%d fetched (ok=%d notfound=%d err=%d)\n",
-					done, len(txs), stats.ok, stats.notFound, stats.fetchErr)
+				fmt.Fprintf(progress, "eth_call prep: %d/%d fetched (ok=%d notfound=%d fetch_err=%d rpc_err=%d)\n",
+					done, len(txs), stats.ok, stats.notFound, stats.fetchErr, stats.rpcErr)
 			}
 
 			if err != nil {
 				stats.fetchErr++
-				if firstErr == "" {
-					firstErr = err.Error()
-				}
+				recordErr("fetch_err", tx.Hash, err.Error())
 				return
 			}
 			if resp == nil {
 				stats.fetchErr++
+				recordErr("fetch_err", tx.Hash, "nil response")
+				return
+			}
+			if resp.Error != nil {
+				stats.rpcErr++
+				recordErr("rpc_err", tx.Hash, fmt.Sprintf("code=%d msg=%s", resp.Error.Code, resp.Error.Message))
 				return
 			}
 			s := strings.TrimSpace(string(resp.Result))
@@ -526,11 +550,11 @@ func prepareEthCallObjects(ctx context.Context, c *rpc.Client, txs []dataset.Tra
 			var raw map[string]interface{}
 			if err := json.Unmarshal(resp.Result, &raw); err != nil {
 				stats.parseErr++
+				recordErr("parse_err", tx.Hash, err.Error())
 				return
 			}
 			obj := buildCallObject(raw)
 			if obj == nil {
-				// No `to` field — contract creation, skipped.
 				stats.contractCreate++
 				return
 			}
@@ -540,8 +564,24 @@ func prepareEthCallObjects(ctx context.Context, c *rpc.Client, txs []dataset.Tra
 	}
 	wg.Wait()
 
-	if progress != nil && firstErr != "" {
-		fmt.Fprintf(progress, "eth_call prep: first fetch error: %s\n", firstErr)
+	if progress != nil && len(sampleErrs) > 0 {
+		fmt.Fprintf(progress, "eth_call prep: distinct error samples (up to %d):\n", maxSampleDistinct)
+		// Sort by count descending for stable, useful output.
+		type kv struct {
+			msg   string
+			count int
+		}
+		ranked := make([]kv, 0, len(sampleErrs))
+		for m, n := range sampleErrs {
+			ranked = append(ranked, kv{m, n})
+		}
+		sort.Slice(ranked, func(i, j int) bool { return ranked[i].count > ranked[j].count })
+		for _, e := range ranked {
+			fmt.Fprintf(progress, "  [x%d] %s\n", e.count, e.msg)
+		}
+		if !verbose {
+			fmt.Fprintln(progress, "eth_call prep: set RPCDUEL_PREP_VERBOSE=1 to print every fetch error.")
+		}
 	}
 	return out, stats
 }
