@@ -281,7 +281,7 @@ func Run(ctx context.Context, ds *dataset.Dataset, cfg Config, concurrency int, 
 	//    comparison run starts. The same canonical call is then sent to both
 	//    sides so eth_call participates in the normal task pipeline.
 	if cfg.enabled("eth_call") && len(ds.Transactions) > 0 {
-		callObjs := prepareEthCallObjects(ctx, cA, ds.Transactions, concurrency)
+		callObjs, stats := prepareEthCallObjects(ctx, cA, ds.Transactions, concurrency, progress)
 		for _, tx := range ds.Transactions {
 			obj, ok := callObjs[strings.ToLower(tx.Hash)]
 			if !ok || obj == nil {
@@ -292,6 +292,12 @@ func Run(ctx context.Context, ds *dataset.Dataset, cfg Config, concurrency int, 
 			}
 			blockRef := fmt.Sprintf("0x%x", tx.BlockNumber-1)
 			addTask("eth_call", []interface{}{obj, blockRef}, CategoryCall)
+		}
+		if progress != nil {
+			fmt.Fprintf(progress,
+				"eth_call prep: %d txs -> ok=%d notfound=%d fetch_err=%d contract_create=%d parse_err=%d (%d eth_call tasks queued)\n",
+				stats.total, stats.ok, stats.notFound, stats.fetchErr, stats.contractCreate, stats.parseErr, stats.ok,
+			)
 		}
 	}
 
@@ -445,53 +451,99 @@ func (c Config) tracerCfg() map[string]interface{} {
 	return c.TracerConfig
 }
 
+// ethCallPrepStats tracks the outcome of the per-tx pre-fetch step.
+type ethCallPrepStats struct {
+	total          int
+	ok             int // tx detail successfully fetched (incl. contract creations counted below)
+	notFound       int // endpoint returned null (tx unknown to this node)
+	fetchErr       int // network/RPC error from endpoint
+	contractCreate int // tx detail had no `to` field (skipped)
+	parseErr       int // tx detail JSON could not be unmarshalled
+}
+
 // prepareEthCallObjects fetches eth_getTransactionByHash from cA for each
 // dataset transaction in parallel and returns a map of canonical eth_call
-// argument objects keyed by lowercase tx hash. Failed fetches and contract
-// creations (no `to`) are silently dropped.
-func prepareEthCallObjects(ctx context.Context, c *rpc.Client, txs []dataset.Transaction, concurrency int) map[string]map[string]interface{} {
+// argument objects keyed by lowercase tx hash, plus stats explaining how
+// many were dropped and why. Periodic progress is written to progress (if
+// non-nil) every 10000 fetches so a long pre-fetch over a million txs gives
+// the user some signal.
+func prepareEthCallObjects(ctx context.Context, c *rpc.Client, txs []dataset.Transaction, concurrency int, progress io.Writer) (map[string]map[string]interface{}, ethCallPrepStats) {
 	if concurrency <= 0 {
 		concurrency = 1
 	}
 	out := make(map[string]map[string]interface{}, len(txs))
-	var mu sync.Mutex
+	stats := ethCallPrepStats{total: len(txs)}
+	var (
+		mu       sync.Mutex
+		done     int
+		firstErr string
+	)
+	const progressEvery = 10000
+
+	if progress != nil {
+		fmt.Fprintf(progress, "eth_call prep: pre-fetching tx details for %d transactions from --rpc[0]...\n", len(txs))
+	}
+
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 	for _, tx := range txs {
-		tx := tx
-		select {
-		case <-ctx.Done():
+		if ctx.Err() != nil {
 			break
-		default:
 		}
+		tx := tx
 		wg.Add(1)
 		sem <- struct{}{}
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
+
 			resp, _, err := c.Call(ctx, "eth_getTransactionByHash", []interface{}{tx.Hash})
-			if err != nil || resp == nil || len(resp.Result) == 0 {
+
+			mu.Lock()
+			defer mu.Unlock()
+			done++
+			if progress != nil && done%progressEvery == 0 {
+				fmt.Fprintf(progress, "eth_call prep: %d/%d fetched (ok=%d notfound=%d err=%d)\n",
+					done, len(txs), stats.ok, stats.notFound, stats.fetchErr)
+			}
+
+			if err != nil {
+				stats.fetchErr++
+				if firstErr == "" {
+					firstErr = err.Error()
+				}
+				return
+			}
+			if resp == nil {
+				stats.fetchErr++
 				return
 			}
 			s := strings.TrimSpace(string(resp.Result))
 			if s == "" || s == "null" {
+				stats.notFound++
 				return
 			}
 			var raw map[string]interface{}
 			if err := json.Unmarshal(resp.Result, &raw); err != nil {
+				stats.parseErr++
 				return
 			}
 			obj := buildCallObject(raw)
 			if obj == nil {
+				// No `to` field — contract creation, skipped.
+				stats.contractCreate++
 				return
 			}
-			mu.Lock()
+			stats.ok++
 			out[strings.ToLower(tx.Hash)] = obj
-			mu.Unlock()
 		}()
 	}
 	wg.Wait()
-	return out
+
+	if progress != nil && firstErr != "" {
+		fmt.Fprintf(progress, "eth_call prep: first fetch error: %s\n", firstErr)
+	}
+	return out, stats
 }
 
 // buildCallObject extracts the eth_call argument fields from a JSON-RPC tx
