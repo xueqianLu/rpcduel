@@ -629,3 +629,128 @@ func TestWriteResultCSV_Empty(t *testing.T) {
 		t.Errorf("expected only header for empty result, got: %q", out)
 	}
 }
+
+// methodMuxServer dispatches JSON-RPC requests to per-method result handlers.
+// If a method has no handler, the server returns null.
+func methodMuxServer(t *testing.T, handlers map[string]func(params []interface{}) interface{}) *httptest.Server {
+t.Helper()
+var mu sync.Mutex
+srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+w.Header().Set("Content-Type", "application/json")
+var req struct {
+ID     int64         `json:"id"`
+Method string        `json:"method"`
+Params []interface{} `json:"params"`
+}
+_ = json.NewDecoder(r.Body).Decode(&req)
+mu.Lock()
+h := handlers[req.Method]
+mu.Unlock()
+var result interface{}
+if h != nil {
+result = h(req.Params)
+}
+_ = json.NewEncoder(w).Encode(map[string]interface{}{
+"jsonrpc": "2.0", "id": req.ID, "result": result,
+})
+}))
+t.Cleanup(srv.Close)
+return srv
+}
+
+func TestRun_OnlyEthCall_NoDiff(t *testing.T) {
+txDetail := map[string]interface{}{
+"from":  "0xaaaa000000000000000000000000000000000001",
+"to":    "0xbbbb000000000000000000000000000000000002",
+"input": "0xdeadbeef",
+"value": "0x0",
+"gas":   "0x5208",
+}
+handlers := map[string]func([]interface{}) interface{}{
+"eth_getTransactionByHash": func(_ []interface{}) interface{} { return txDetail },
+"eth_call": func(_ []interface{}) interface{} { return "0x01" },
+}
+srv := methodMuxServer(t, handlers)
+
+ds := &dataset.Dataset{
+Transactions: []dataset.Transaction{{Hash: "0xtx1", BlockNumber: 10, From: "0xaaaa", To: "0xbbbb"}},
+}
+cfg := testConfig(srv.URL, srv.URL, diff.DefaultOptions())
+cfg.Only = map[string]bool{"eth_call": true}
+
+result, err := replay.Run(context.Background(), ds, cfg, 2, nil)
+if err != nil {
+t.Fatalf("Run: %v", err)
+}
+if result.TotalRequests != 1 {
+t.Fatalf("expected 1 eth_call request, got %d", result.TotalRequests)
+}
+if len(result.Diffs) != 0 {
+t.Fatalf("expected no diffs, got %d: %+v", len(result.Diffs), result.Diffs)
+}
+if result.TransactionsTested != 1 {
+t.Fatalf("expected 1 tx tested, got %d", result.TransactionsTested)
+}
+}
+
+func TestRun_OnlyEthCall_Mismatch(t *testing.T) {
+txDetail := map[string]interface{}{
+"from":  "0xaaaa000000000000000000000000000000000001",
+"to":    "0xbbbb000000000000000000000000000000000002",
+"input": "0xdeadbeef",
+}
+hA := map[string]func([]interface{}) interface{}{
+"eth_getTransactionByHash": func(_ []interface{}) interface{} { return txDetail },
+"eth_call":                 func(_ []interface{}) interface{} { return "0x01" },
+}
+hB := map[string]func([]interface{}) interface{}{
+"eth_getTransactionByHash": func(_ []interface{}) interface{} { return txDetail },
+"eth_call":                 func(_ []interface{}) interface{} { return "0x02" },
+}
+srvA := methodMuxServer(t, hA)
+srvB := methodMuxServer(t, hB)
+
+ds := &dataset.Dataset{
+Transactions: []dataset.Transaction{{Hash: "0xtx1", BlockNumber: 10}},
+}
+cfg := testConfig(srvA.URL, srvB.URL, diff.DefaultOptions())
+cfg.Only = map[string]bool{"eth_call": true}
+
+result, err := replay.Run(context.Background(), ds, cfg, 2, nil)
+if err != nil {
+t.Fatalf("Run: %v", err)
+}
+if len(result.Diffs) != 1 {
+t.Fatalf("expected 1 diff, got %d: %+v", len(result.Diffs), result.Diffs)
+}
+d := result.Diffs[0]
+if d.Category != replay.CategoryCall || d.Method != "eth_call" {
+t.Fatalf("unexpected diff: %+v", d)
+}
+}
+
+func TestRun_EthCallSkipsContractCreation(t *testing.T) {
+// Transaction returned with `to: null` should be skipped (no eth_call task).
+creation := map[string]interface{}{
+"from":  "0xaaaa",
+"to":    nil,
+"input": "0x6080",
+}
+handlers := map[string]func([]interface{}) interface{}{
+"eth_getTransactionByHash": func(_ []interface{}) interface{} { return creation },
+"eth_call":                 func(_ []interface{}) interface{} { return "0x" },
+}
+srv := methodMuxServer(t, handlers)
+ds := &dataset.Dataset{
+Transactions: []dataset.Transaction{{Hash: "0xtx1", BlockNumber: 10}},
+}
+cfg := testConfig(srv.URL, srv.URL, diff.DefaultOptions())
+cfg.Only = map[string]bool{"eth_call": true}
+result, err := replay.Run(context.Background(), ds, cfg, 2, nil)
+if err != nil {
+t.Fatalf("Run: %v", err)
+}
+if result.TotalRequests != 0 {
+t.Fatalf("expected contract creation to be skipped, got %d requests", result.TotalRequests)
+}
+}

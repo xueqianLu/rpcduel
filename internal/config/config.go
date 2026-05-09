@@ -102,6 +102,7 @@ type ReplaySection struct {
 	MaxTxPerAccount  int           `yaml:"max_tx_per_account,omitempty"`
 	TraceTransaction bool          `yaml:"trace_transaction,omitempty"`
 	TraceBlock       bool          `yaml:"trace_block,omitempty"`
+	EthCall          bool          `yaml:"eth_call,omitempty"`
 	Only             []string      `yaml:"only,omitempty"`
 	IgnoreFields     []string      `yaml:"ignore_fields,omitempty"`
 	Timeout          time.Duration `yaml:"timeout,omitempty"`

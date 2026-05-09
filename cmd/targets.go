@@ -17,6 +17,7 @@ func parseReplayOnlyTargets(raw []string) (map[string]bool, error) {
 		"tx":          {"transaction_by_hash", "transaction_receipt"},
 		"block":       {"block_by_number"},
 		"trace":       {"trace_transaction", "trace_block"},
+		"call":        {"eth_call"},
 	}
 	allowed := map[string]bool{
 		"balance":             true,
@@ -26,6 +27,7 @@ func parseReplayOnlyTargets(raw []string) (map[string]bool, error) {
 		"block_by_number":     true,
 		"trace_transaction":   true,
 		"trace_block":         true,
+		"eth_call":            true,
 	}
 	return parseOnlyTargets(raw, aliases, allowed)
 }

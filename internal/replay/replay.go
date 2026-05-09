@@ -36,6 +36,7 @@ const (
 	CategoryTx       DiffCategory = "tx_mismatch"
 	CategoryReceipt  DiffCategory = "receipt_mismatch"
 	CategoryTrace    DiffCategory = "trace_mismatch"
+	CategoryCall     DiffCategory = "call_mismatch"
 	CategoryMissing  DiffCategory = "missing_data"
 	CategoryRPCError DiffCategory = "rpc_error"
 	CategoryBlock    DiffCategory = "block_mismatch"
@@ -106,7 +107,13 @@ type Config struct {
 	DiffOpts         diff.Options
 	TraceTransaction bool
 	TraceBlock       bool
-	Only             map[string]bool
+	// EthCall, when true, simulates each dataset transaction as eth_call
+	// against both endpoints at the parent block and compares the return
+	// data. The full call object (to/from/data/value/gas/...) is fetched
+	// from EndpointA via eth_getTransactionByHash before the comparison
+	// run starts, so the same params are sent to both sides.
+	EthCall bool
+	Only    map[string]bool
 	// TracerConfig is the second argument passed to debug_traceTransaction
 	// and debug_traceBlockByNumber. Nil → empty object (node default tracer).
 	// Build it via internal/tracerflag.
@@ -152,7 +159,7 @@ func Run(ctx context.Context, ds *dataset.Dataset, cfg Config, concurrency int, 
 		BlocksTested:       0,
 	}
 	accountEnabled := cfg.enabled("balance") || cfg.enabled("transaction_count")
-	transactionEnabled := cfg.enabled("transaction_by_hash") || cfg.enabled("transaction_receipt") || cfg.enabled("trace_transaction")
+	transactionEnabled := cfg.enabled("transaction_by_hash") || cfg.enabled("transaction_receipt") || cfg.enabled("trace_transaction") || cfg.enabled("eth_call")
 	blockEnabled := cfg.enabled("block_by_number") || cfg.enabled("trace_block")
 	if accountEnabled {
 		result.AccountsTested = len(ds.Accounts)
@@ -266,6 +273,25 @@ func Run(ctx context.Context, ds *dataset.Dataset, cfg Config, concurrency int, 
 		}
 		if cfg.enabled("trace_block") {
 			addTask("debug_traceBlockByNumber", []interface{}{hexNumber, cfg.tracerCfg()}, CategoryTrace)
+		}
+	}
+
+	// 4. eth_call simulation: requires per-tx call object data which is not
+	//    in the dataset, so we pre-fetch tx details from EndpointA before the
+	//    comparison run starts. The same canonical call is then sent to both
+	//    sides so eth_call participates in the normal task pipeline.
+	if cfg.enabled("eth_call") && len(ds.Transactions) > 0 {
+		callObjs := prepareEthCallObjects(ctx, cA, ds.Transactions, concurrency)
+		for _, tx := range ds.Transactions {
+			obj, ok := callObjs[strings.ToLower(tx.Hash)]
+			if !ok || obj == nil {
+				continue
+			}
+			if tx.BlockNumber <= 0 {
+				continue
+			}
+			blockRef := fmt.Sprintf("0x%x", tx.BlockNumber-1)
+			addTask("eth_call", []interface{}{obj, blockRef}, CategoryCall)
 		}
 	}
 
@@ -403,6 +429,8 @@ func (c Config) enabled(target string) bool {
 		return c.TraceTransaction
 	case "trace_block":
 		return c.TraceBlock
+	case "eth_call":
+		return c.EthCall
 	default:
 		return true
 	}
@@ -415,6 +443,78 @@ func (c Config) tracerCfg() map[string]interface{} {
 		return map[string]interface{}{}
 	}
 	return c.TracerConfig
+}
+
+// prepareEthCallObjects fetches eth_getTransactionByHash from cA for each
+// dataset transaction in parallel and returns a map of canonical eth_call
+// argument objects keyed by lowercase tx hash. Failed fetches and contract
+// creations (no `to`) are silently dropped.
+func prepareEthCallObjects(ctx context.Context, c *rpc.Client, txs []dataset.Transaction, concurrency int) map[string]map[string]interface{} {
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	out := make(map[string]map[string]interface{}, len(txs))
+	var mu sync.Mutex
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for _, tx := range txs {
+		tx := tx
+		select {
+		case <-ctx.Done():
+			break
+		default:
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			resp, _, err := c.Call(ctx, "eth_getTransactionByHash", []interface{}{tx.Hash})
+			if err != nil || resp == nil || len(resp.Result) == 0 {
+				return
+			}
+			s := strings.TrimSpace(string(resp.Result))
+			if s == "" || s == "null" {
+				return
+			}
+			var raw map[string]interface{}
+			if err := json.Unmarshal(resp.Result, &raw); err != nil {
+				return
+			}
+			obj := buildCallObject(raw)
+			if obj == nil {
+				return
+			}
+			mu.Lock()
+			out[strings.ToLower(tx.Hash)] = obj
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	return out
+}
+
+// buildCallObject extracts the eth_call argument fields from a JSON-RPC tx
+// object. Returns nil for contract creations (no `to`) since their result
+// (deployed bytecode) is rarely the interesting comparison target and most
+// archive nodes will refuse the call without explicit hand-tuning.
+func buildCallObject(raw map[string]interface{}) map[string]interface{} {
+	to, _ := raw["to"].(string)
+	if to == "" {
+		return nil
+	}
+	obj := map[string]interface{}{"to": to}
+	for _, k := range []string{"from", "gas", "gasPrice", "maxFeePerGas", "maxPriorityFeePerGas", "value"} {
+		if v, ok := raw[k].(string); ok && v != "" {
+			obj[k] = v
+		}
+	}
+	if v, ok := raw["input"].(string); ok && v != "" && v != "0x" {
+		obj["data"] = v
+	} else if v, ok := raw["data"].(string); ok && v != "" && v != "0x" {
+		obj["data"] = v
+	}
+	return obj
 }
 
 // callOutcome carries the counters and optional diff produced by one RPC pair.

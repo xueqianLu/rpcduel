@@ -40,6 +40,7 @@ var (
 	diffTestMaxTxPerAccount  int
 	diffTestTraceTransaction bool
 	diffTestTraceBlock       bool
+	diffTestEthCall          bool
 	diffTestTracer           string
 	diffTestTracerCfg        string
 	diffTestOnly             []string
@@ -69,6 +70,9 @@ func init() {
 		"Also compare debug_traceTransaction for dataset transactions")
 	diffTestCmd.Flags().BoolVar(&diffTestTraceBlock, "trace-block", false,
 		"Also compare debug_traceBlockByNumber for dataset blocks")
+	diffTestCmd.Flags().BoolVar(&diffTestEthCall, "eth-call", false,
+		"Also simulate each dataset transaction as eth_call (at parent block) and compare the return data. "+
+			"Call objects are pre-fetched from --rpc[0] via eth_getTransactionByHash.")
 	diffTestCmd.Flags().StringVar(&diffTestTracer, "tracer", tracerflag.Default, tracerflag.FlagUsage())
 	diffTestCmd.Flags().StringVar(&diffTestTracerCfg, "tracer-config", "", tracerflag.ConfigFlagUsage())
 	diffTestCmd.Flags().StringSliceVar(&diffTestOnly, "only", nil,
@@ -110,6 +114,9 @@ func fillReplayDefaults(cmd *cobra.Command) {
 	if !f.Changed("trace-block") && r.TraceBlock {
 		diffTestTraceBlock = true
 	}
+	if !f.Changed("eth-call") && r.EthCall {
+		diffTestEthCall = true
+	}
 	if !f.Changed("only") && len(r.Only) > 0 {
 		diffTestOnly = append([]string{}, r.Only...)
 	}
@@ -142,8 +149,8 @@ func runDiffTest(cmd *cobra.Command, args []string) error {
 	if len(diffTestRPCs) != 2 {
 		return fmt.Errorf("exactly 2 --rpc endpoints are required")
 	}
-	if len(diffTestOnly) > 0 && (diffTestTraceTransaction || diffTestTraceBlock) {
-		return fmt.Errorf("--only cannot be combined with --trace-transaction or --trace-block")
+	if len(diffTestOnly) > 0 && (diffTestTraceTransaction || diffTestTraceBlock || diffTestEthCall) {
+		return fmt.Errorf("--only cannot be combined with --trace-transaction, --trace-block, or --eth-call")
 	}
 	only, err := parseReplayOnlyTargets(diffTestOnly)
 	if err != nil {
@@ -178,6 +185,7 @@ func runDiffTest(cmd *cobra.Command, args []string) error {
 		DiffOpts:         opts,
 		TraceTransaction: diffTestTraceTransaction,
 		TraceBlock:       diffTestTraceBlock,
+		EthCall:          diffTestEthCall,
 		TracerConfig:     tracerCfg,
 		Only:             only,
 		RPCOptions:       rpcOptions(diffTestTimeout),

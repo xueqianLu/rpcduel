@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `rpcduel replay --eth-call` — re-executes each dataset transaction as
+  `eth_call` against both endpoints at the parent block and compares the
+  return data, surfacing a new `call_mismatch` diff category. The full
+  call object (`to/from/data/value/gas/...`) is pre-fetched from the
+  first endpoint via `eth_getTransactionByHash`, so identical params hit
+  both sides. Contract creations are skipped. Also wired into `--only`
+  as `eth_call` (alias `call`) and into the `replay.eth_call` config key.
 - `--tracer` / `--tracer-config` flags for `rpcduel benchgen`, `rpcduel
   replay`, and `rpcduel record`. The default tracer for the
   `debug_trace*` family is now `callTracer` (the de-facto standard used

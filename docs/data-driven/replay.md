@@ -21,6 +21,7 @@ by every node, so they are opt-in.
 * transactions → `eth_getTransactionByHash`, `eth_getTransactionReceipt`
 * blocks → `eth_getBlockByNumber`
 * optional trace RPCs → `debug_traceTransaction` (`--trace-transaction`), `debug_traceBlockByNumber` (`--trace-block`)
+* optional `eth_call` simulation → `--eth-call` (replays each dataset transaction as `eth_call` at the parent block and compares the return data)
 
 Duplicate tasks with the same **method + params** are automatically deduplicated. Different methods
 for the same transaction or block are **not** considered duplicates, so
@@ -35,6 +36,7 @@ for the same transaction or block are **not** considered duplicates, so
 | `--max-tx-per-account` | `100` | Max transactions tested per account (0 = unlimited) |
 | `--trace-transaction` | `false` | Also compare `debug_traceTransaction` |
 | `--trace-block` | `false` | Also compare `debug_traceBlockByNumber` |
+| `--eth-call` | `false` | Re-execute each dataset transaction as `eth_call` (at parent block) and compare the return data. Call objects are pre-fetched from `--rpc[0]` via `eth_getTransactionByHash`; contract creations are skipped. |
 | `--tracer` | `callTracer` | Tracer name passed to `debug_trace*` (e.g. `callTracer`, `prestateTracer`, `4byteTracer`, `noopTracer`, `muxTracer`, `flatCallTracer`). Use `default` to keep the node's built-in `structLogger`. |
 | `--tracer-config` | _(none)_ | JSON object placed under `tracerConfig`, e.g. `'{"onlyTopCall":true}'` or `'{"diffMode":true}'`. |
 | `--only` | | Only run selected targets, e.g. `balance`, `transaction`, `block`, `trace` |
@@ -57,6 +59,7 @@ for the same transaction or block are **not** considered duplicates, so
 | `tx_mismatch` | `eth_getTransactionByHash` result differs |
 | `receipt_mismatch` | `eth_getTransactionReceipt` result differs |
 | `trace_mismatch` | `debug_traceTransaction` or `debug_traceBlockByNumber` result differs |
+| `call_mismatch` | `eth_call` (`--eth-call`) return data differs |
 | `block_mismatch` | `eth_getBlockByNumber` result differs |
 | `missing_data` | One endpoint returns `null`, the other does not |
 | `rpc_error` | One endpoint returns an error, the other succeeds |
@@ -64,11 +67,11 @@ for the same transaction or block are **not** considered duplicates, so
 
 ## `--only` targets
 
-* fine-grained: `balance`, `transaction_count`, `transaction_by_hash`, `transaction_receipt`, `block_by_number`, `trace_transaction`, `trace_block`
-* aliases: `account`, `transaction`, `block`, `trace`
+* fine-grained: `balance`, `transaction_count`, `transaction_by_hash`, `transaction_receipt`, `block_by_number`, `trace_transaction`, `trace_block`, `eth_call`
+* aliases: `account`, `transaction`, `block`, `trace`, `call`
 
-`--only` cannot be combined with `--trace-transaction` or `--trace-block`. For trace-only replay,
-use `--only trace` or `--only trace_transaction`.
+`--only` cannot be combined with `--trace-transaction`, `--trace-block`, or `--eth-call`. For
+`eth_call`-only replay use `--only eth_call` (or `--only call`).
 
 ## Progress
 
