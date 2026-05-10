@@ -16,7 +16,7 @@ The diff engine performs a deep JSON comparison with **hex/decimal normalisation
 | `--rpc` | _(required, ≥2)_ | Endpoint URLs to compare |
 | `--method` | `eth_blockNumber` | JSON-RPC method |
 | `--params` | `[]` | JSON-encoded params array |
-| `--input` | | JSON batch-request file `[{method, params}]` |
+| `--input` | | Requests file: JSON array, single object, or NDJSON (one JSON-RPC request per line). Extra fields like `jsonrpc`/`id` are ignored. |
 | `--repeat` | `1` | Repeat each request N times |
 | `--ignore-field` | | Field name(s) to skip in comparison |
 | `--ignore-order` | `false` | Treat arrays as unordered sets |
@@ -60,6 +60,24 @@ rpcduel diff \
     "params": ["0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045", "latest"]
   }
 ]
+```
+
+You can also feed an NDJSON file (one full JSON-RPC request per line, e.g.
+captured from a node's access log). Extra fields like `jsonrpc` and `id`
+are ignored, and lines starting with `#` are treated as comments:
+
+```text
+# captured from access log on 2026-05-10
+{"jsonrpc":"2.0","id":2076,"method":"eth_call","params":[{"data":"0x06fdde03","to":"0x0000000000000000000000000000000000000100"},"0xa0"]}
+{"jsonrpc":"2.0","id":2077,"method":"eth_call","params":[{"data":"0x95d89b41","to":"0x0000000000000000000000000000000000000100"},"latest"]}
+```
+
+```bash
+rpcduel diff \
+  --rpc http://node-a:8545 \
+  --rpc http://node-b:8545 \
+  --input captured.ndjson \
+  --output json
 ```
 
 ## See also

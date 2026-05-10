@@ -4,6 +4,8 @@
 package cmd
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -54,7 +56,7 @@ func init() {
 	diffCmd.Flags().StringArrayVar(&diffRPCs, "rpc", nil, "RPC endpoint URL (can be specified multiple times, minimum 2)")
 	diffCmd.Flags().StringVar(&diffMethod, "method", "eth_blockNumber", "JSON-RPC method name")
 	diffCmd.Flags().StringVar(&diffParamsStr, "params", "[]", "JSON-encoded params array")
-	diffCmd.Flags().StringVar(&diffInputFile, "input", "", "JSON file with batch requests [{method, params}]")
+	diffCmd.Flags().StringVar(&diffInputFile, "input", "", "Requests file: JSON array, single object, or NDJSON (one JSON-RPC request per line). Extra fields like jsonrpc/id are ignored.")
 	diffCmd.Flags().IntVar(&diffRepeat, "repeat", 1, "Number of times to repeat the request")
 	diffCmd.Flags().StringVar(&diffOutput, "output", "text", "Output format: text or json")
 	diffCmd.Flags().StringArrayVar(&diffIgnoreFields, "ignore-field", nil, "JSON field names to ignore in comparison")
@@ -208,9 +210,12 @@ func loadRequests() ([]BatchRequest, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read input file: %w", err)
 		}
-		var reqs []BatchRequest
-		if err := json.Unmarshal(data, &reqs); err != nil {
+		reqs, err := parseRequestsFile(data)
+		if err != nil {
 			return nil, fmt.Errorf("parse input file: %w", err)
+		}
+		if len(reqs) == 0 {
+			return nil, fmt.Errorf("input file %s contained no requests", diffInputFile)
 		}
 		return reqs, nil
 	}
@@ -220,4 +225,67 @@ func loadRequests() ([]BatchRequest, error) {
 		return nil, err
 	}
 	return []BatchRequest{{Method: diffMethod, Params: params}}, nil
+}
+
+// parseRequestsFile accepts three input shapes:
+//
+//  1. A JSON array of {method, params, ...} objects (legacy format).
+//  2. A single JSON object with {method, params, ...}.
+//  3. NDJSON / JSON-Lines: one JSON-RPC request object per line. Extra
+//     fields like "jsonrpc" and "id" are ignored. Blank lines and lines
+//     starting with '#' are skipped so users can annotate captured logs.
+//
+// This makes it trivial to feed a file of raw JSON-RPC requests captured
+// from a node's access log straight into `rpcduel diff --input`.
+func parseRequestsFile(data []byte) ([]BatchRequest, error) {
+	trim := bytes.TrimSpace(data)
+	if len(trim) == 0 {
+		return nil, nil
+	}
+	switch trim[0] {
+	case '[':
+		var reqs []BatchRequest
+		if err := json.Unmarshal(trim, &reqs); err != nil {
+			return nil, err
+		}
+		return reqs, nil
+	case '{':
+		// Could be either a single object or NDJSON starting with '{'.
+		// Try single-object first; if there's trailing content, fall
+		// through to NDJSON.
+		dec := json.NewDecoder(bytes.NewReader(trim))
+		var single BatchRequest
+		if err := dec.Decode(&single); err == nil {
+			// Look for trailing non-whitespace.
+			rest := bytes.TrimSpace(trim[dec.InputOffset():])
+			if len(rest) == 0 {
+				return []BatchRequest{single}, nil
+			}
+		}
+	}
+
+	// NDJSON / JSON-Lines fallback.
+	var reqs []BatchRequest
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+	lineNo := 0
+	for scanner.Scan() {
+		lineNo++
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 || line[0] == '#' {
+			continue
+		}
+		var req BatchRequest
+		if err := json.Unmarshal(line, &req); err != nil {
+			return nil, fmt.Errorf("line %d: %w", lineNo, err)
+		}
+		if req.Method == "" {
+			return nil, fmt.Errorf("line %d: missing \"method\"", lineNo)
+		}
+		reqs = append(reqs, req)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return reqs, nil
 }
