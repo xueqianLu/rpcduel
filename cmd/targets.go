@@ -43,6 +43,7 @@ func parseBenchgenOnlyTargets(raw []string) (map[string]bool, error) {
 		"trace":             {"debug_trace_transaction", "debug_trace_block"},
 		"trace_transaction": {"debug_trace_transaction"},
 		"trace_block":       {"debug_trace_block"},
+		"call":              {"eth_call"},
 	}
 	allowed := map[string]bool{
 		"balance":                 true,
@@ -54,6 +55,7 @@ func parseBenchgenOnlyTargets(raw []string) (map[string]bool, error) {
 		"mixed_balance":           true,
 		"debug_trace_transaction": true,
 		"debug_trace_block":       true,
+		"eth_call":                true,
 	}
 	return parseOnlyTargets(raw, aliases, allowed)
 }

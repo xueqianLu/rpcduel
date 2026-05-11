@@ -33,7 +33,7 @@ Scenarios generated (basic):
   balance, transaction_count, transaction_by_hash, transaction_receipt, block_by_number
 
 Scenarios generated (complex):
-  get_logs, mixed_balance
+  get_logs, mixed_balance, eth_call
 
 Optional trace scenarios:
   debug_trace_transaction, debug_trace_block`,

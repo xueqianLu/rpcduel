@@ -34,10 +34,11 @@ rpcduel benchgen [flags]
 |---|---|---|
 | `balance` | 0.20 | `eth_getBalance` |
 | `transaction_count` | 0.10 | `eth_getTransactionCount` |
-| `transaction_by_hash` | 0.15 | `eth_getTransactionByHash` |
-| `transaction_receipt` | 0.15 | `eth_getTransactionReceipt` |
+| `transaction_by_hash` | 0.10 | `eth_getTransactionByHash` |
+| `transaction_receipt` | 0.10 | `eth_getTransactionReceipt` |
 | `block_by_number` | 0.10 | `eth_getBlockByNumber` |
 | `get_logs` | 0.10 | `eth_getLogs` |
+| `eth_call` | 0.10 | `eth_call` against `tx.To` addresses with standard ERC-20 read selectors (`name/symbol/decimals/totalSupply/balanceOf`) at `latest` |
 | `debug_trace_transaction` | 0.10 | `debug_traceTransaction` _(only with `--trace-transaction`)_ |
 | `debug_trace_block` | 0.05 | `debug_traceBlockByNumber` _(only with `--trace-block`)_ |
 | `mixed_balance` | 0.05 | `eth_getBalance` at shuffled historical block heights |
@@ -48,8 +49,8 @@ instead of cycling a pre-built request pool.
 
 ## `--only` groups
 
-* scenario names: `balance`, `transaction_count`, `transaction_by_hash`, `transaction_receipt`, `block_by_number`, `get_logs`, `mixed_balance`, `debug_trace_transaction`, `debug_trace_block`
-* aliases: `account`, `transaction`, `block`, `logs`, `trace`, `trace_transaction`, `trace_block`
+* scenario names: `balance`, `transaction_count`, `transaction_by_hash`, `transaction_receipt`, `block_by_number`, `get_logs`, `eth_call`, `mixed_balance`, `debug_trace_transaction`, `debug_trace_block`
+* aliases: `account`, `transaction`, `block`, `logs`, `call`, `trace`, `trace_transaction`, `trace_block`
 
 `--only` cannot be combined with `--trace-transaction` or `--trace-block`.
 

@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `rpcduel benchgen` now generates an `eth_call` scenario by default
+  (weight 0.10). It synthesises read-only contract reads against unique
+  `tx.To` addresses observed in the dataset using the standard ERC-20
+  selectors (`name/symbol/decimals/totalSupply` + `balanceOf(account)`)
+  at `"latest"`, so it works on non-archive nodes without any
+  pre-fetching. Wired into `--only` as `eth_call` (alias `call`).
+  `transaction_by_hash` and `transaction_receipt` weights were lowered
+  from 0.15 to 0.10 to keep the total weight at 1.0.
+- `rpcduel diff --input` now accepts NDJSON / JSON-Lines (one full
+  JSON-RPC request per line) as well as a single JSON-RPC object, in
+  addition to the original JSON-array shape. Extra fields like
+  `jsonrpc`/`id` are ignored, and `#`-prefixed lines are treated as
+  comments — making it trivial to feed captured access-log lines into
+  `rpcduel diff`.
+- `rpcduel replay --eth-call` pre-fetch step now prints per-reason
+  outcome counts (`ok / notfound / fetch_err / rpc_err / contract_create
+  / parse_err`), the top distinct error messages, and progress every
+  10k fetches. Set `RPCDUEL_PREP_VERBOSE=1` to log every individual
+  fetch error, for triaging small datasets.
 - `rpcduel replay --eth-call` — re-executes each dataset transaction as
   `eth_call` against both endpoints at the parent block and compares the
   return data, surfacing a new `call_mismatch` diff category. The full

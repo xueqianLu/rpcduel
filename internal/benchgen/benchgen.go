@@ -241,7 +241,7 @@ func GenerateWithOptions(ds *dataset.Dataset, rng *rand.Rand, opts Options) *Ben
 
 	// eth_getTransactionByHash
 	{
-		s := Scenario{Name: "transaction_by_hash", Weight: 0.15}
+		s := Scenario{Name: "transaction_by_hash", Weight: 0.10}
 		if opts.enabled("transaction_by_hash") {
 			for _, tx := range ds.Transactions {
 				s.Requests = append(s.Requests, Request{
@@ -257,7 +257,7 @@ func GenerateWithOptions(ds *dataset.Dataset, rng *rand.Rand, opts Options) *Ben
 
 	// eth_getTransactionReceipt
 	{
-		s := Scenario{Name: "transaction_receipt", Weight: 0.15}
+		s := Scenario{Name: "transaction_receipt", Weight: 0.10}
 		if opts.enabled("transaction_receipt") {
 			for _, tx := range ds.Transactions {
 				s.Requests = append(s.Requests, Request{
@@ -374,7 +374,112 @@ func GenerateWithOptions(ds *dataset.Dataset, rng *rand.Rand, opts Options) *Ben
 		}
 	}
 
+	// eth_call – stateless contract reads against observed contract
+	// addresses. Uses a small palette of standard ERC-20/721/1155 read
+	// selectors to exercise the eth_call code path without needing any
+	// extra dataset fields. Always queries "latest" so it works on
+	// non-archive nodes.
+	{
+		s := Scenario{Name: "eth_call", Weight: 0.10}
+		if opts.enabled("eth_call") {
+			for _, req := range buildEthCallRequests(ds) {
+				s.Requests = append(s.Requests, req)
+			}
+		}
+		if opts.enabled("eth_call") && len(s.Requests) > 0 {
+			bf.Scenarios = append(bf.Scenarios, s)
+		}
+	}
+
 	return bf
+}
+
+// Standard read-only selectors used by the eth_call scenario. These are
+// safe on EOAs and contracts alike (an EOA call simply returns 0x).
+const (
+	selectorName        = "0x06fdde03" // name()
+	selectorSymbol      = "0x95d89b41" // symbol()
+	selectorDecimals    = "0x313ce567" // decimals()
+	selectorTotalSupply = "0x18160ddd" // totalSupply()
+	selectorBalanceOf   = "0x70a08231" // balanceOf(address)
+)
+
+// buildEthCallRequests synthesises read-only eth_call requests for each
+// unique recipient address observed in the dataset, rotating through a
+// small palette of standard selectors. When account addresses are
+// available it also emits balanceOf(account) calls against the same
+// targets. All calls are issued at "latest" so they don't require an
+// archive node.
+func buildEthCallRequests(ds *dataset.Dataset) []Request {
+	noArgSelectors := []string{
+		selectorName,
+		selectorSymbol,
+		selectorDecimals,
+		selectorTotalSupply,
+	}
+
+	seen := make(map[string]bool, len(ds.Transactions))
+	targets := make([]string, 0, len(ds.Transactions))
+	for _, tx := range ds.Transactions {
+		to := strings.TrimSpace(tx.To)
+		if to == "" {
+			continue
+		}
+		key := strings.ToLower(to)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		targets = append(targets, to)
+	}
+
+	var out []Request
+	for i, to := range targets {
+		sel := noArgSelectors[i%len(noArgSelectors)]
+		out = append(out, Request{
+			Method: "eth_call",
+			Params: []interface{}{
+				map[string]interface{}{
+					"to":   to,
+					"data": sel,
+				},
+				"latest",
+			},
+		})
+	}
+
+	// balanceOf(address) for each (target, account) pair, capped to
+	// avoid blowing up the scenario file on very large datasets.
+	if len(ds.Accounts) > 0 && len(targets) > 0 {
+		const maxBalanceOf = 4096
+		emitted := 0
+		for _, acct := range ds.Accounts {
+			if emitted >= maxBalanceOf {
+				break
+			}
+			arg := strings.ToLower(strings.TrimPrefix(acct.Address, "0x"))
+			if len(arg) > 64 {
+				continue
+			}
+			for len(arg) < 64 {
+				arg = "0" + arg
+			}
+			data := selectorBalanceOf + arg
+			to := targets[emitted%len(targets)]
+			out = append(out, Request{
+				Method: "eth_call",
+				Params: []interface{}{
+					map[string]interface{}{
+						"to":   to,
+						"data": data,
+					},
+					"latest",
+				},
+			})
+			emitted++
+		}
+	}
+	return out
 }
 
 func defaultRNG(rng *rand.Rand) *rand.Rand {
