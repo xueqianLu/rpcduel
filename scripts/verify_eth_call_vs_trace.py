@@ -172,6 +172,80 @@ def build_call_object(tx: dict[str, Any]) -> dict[str, Any] | None:
 # Per-tx verification
 # ---------------------------------------------------------------------------
 
+def decode_revert_reason(returndata: str) -> str | None:
+    """Decode the standard ABI-encoded revert payloads.
+
+    Recognises:
+      * Error(string)        selector 0x08c379a0 — Solidity require/revert
+      * Panic(uint256)       selector 0x4e487b71 — Solidity 0.8 panic codes
+
+    Returns a human-readable string, or None if the payload is not a
+    recognised standard revert wrapper.
+    """
+    if not returndata or not returndata.startswith("0x") or len(returndata) < 10:
+        return None
+    selector = returndata[:10].lower()
+    body = returndata[10:]
+
+    if selector == "0x08c379a0":  # Error(string)
+        # ABI: offset(32) | length(32) | data(padded)
+        if len(body) < 128:
+            return None
+        try:
+            length = int(body[64:128], 16)
+            raw = body[128:128 + length * 2]
+            if len(raw) < length * 2:
+                return None
+            return bytes.fromhex(raw).decode("utf-8", errors="replace")
+        except (ValueError, UnicodeDecodeError):
+            return None
+
+    if selector == "0x4e487b71":  # Panic(uint256)
+        if len(body) < 64:
+            return None
+        try:
+            code = int(body[:64], 16)
+        except ValueError:
+            return None
+        codes = {
+            0x00: "generic panic",
+            0x01: "assert(false)",
+            0x11: "arithmetic over/underflow",
+            0x12: "division/modulo by zero",
+            0x21: "invalid enum value",
+            0x22: "storage byte array bad encoding",
+            0x31: "pop on empty array",
+            0x32: "array index out of bounds",
+            0x41: "memory allocation overflow",
+            0x51: "call to invalid internal function",
+        }
+        return f"panic 0x{code:02x} ({codes.get(code, 'unknown')})"
+    return None
+
+
+def extract_call_revert_reason(call_err_msg: str) -> str | None:
+    """Pull the human revert reason out of an eth_call error message.
+
+    Geth-style messages look like:
+        "execution reverted: Usd1swapRouter: INSUFFICIENT_OUTPUT_AMOUNT"
+    Some clients omit the prefix entirely. We strip the common prefix
+    if present and trim whitespace.
+    """
+    if not call_err_msg:
+        return None
+    s = call_err_msg.strip()
+    # The full ERROR: line includes "rpc error code=3 msg=execution reverted: …"
+    marker = "execution reverted"
+    idx = s.lower().find(marker)
+    if idx >= 0:
+        rest = s[idx + len(marker):].lstrip(" :")
+        return rest if rest else ""
+    # Some nodes return just the reason with no prefix.
+    if s.lower().startswith("error:"):
+        s = s[len("error:"):].lstrip()
+    return s or None
+
+
 @dataclass
 class Outcome:
     hash: str
@@ -242,19 +316,55 @@ def verify_one(url: str, tx_hash: str, dataset_block: int, timeout: float) -> Ou
     if trace_error:
         # Real tx reverted. Did eth_call also revert?
         is_call_revert = call_returndata.startswith("ERROR:")
-        if is_call_revert and trace_returndata == "0x":
+        if not is_call_revert:
+            # eth_call did NOT revert but tx did on-chain → real divergence.
+            return Outcome(tx_hash, block_num, "mismatch", call_returndata, trace_returndata,
+                           f"trace reverted ({trace_error}) but eth_call succeeded")
+
+        # Both sides reverted. Try several layers of equivalence.
+        # 1. Trace returned no data — accept if eth_call also has none.
+        if trace_returndata == "0x":
             return Outcome(tx_hash, block_num, "match", call_returndata, trace_returndata,
                            f"both reverted ({trace_error})")
-        if is_call_revert:
-            # Check whether the call's error message embeds the revert data.
-            if trace_returndata != "0x" and trace_returndata[2:] in call_returndata.lower():
+
+        call_msg = call_returndata[len("ERROR:"):]
+        call_lower = call_returndata.lower()
+
+        # 2. Raw revert data of the trace appears verbatim in eth_call's
+        #    error (geth puts the data in error.data and many gateways
+        #    embed it in the message).
+        if trace_returndata[2:] in call_lower:
+            return Outcome(tx_hash, block_num, "match", call_returndata, trace_returndata,
+                           f"both reverted with same data ({trace_error})")
+
+        # 3. Decode trace's standard ABI revert wrapper and compare the
+        #    decoded reason to the human-readable suffix of eth_call's
+        #    error message. This catches the common case where the node
+        #    decoded Error(string) for eth_call but returned the raw
+        #    payload for the tracer.
+        decoded = decode_revert_reason(trace_returndata)
+        call_reason = extract_call_revert_reason(call_msg)
+        if decoded is not None and call_reason is not None:
+            if decoded.strip().lower() == call_reason.strip().lower():
                 return Outcome(tx_hash, block_num, "match", call_returndata, trace_returndata,
-                               f"both reverted with same data ({trace_error})")
+                               f"both reverted with reason: {decoded!r}")
+            # Substring match handles wrappers like "Dex: " prefixes added
+            # by some routers, or surrounding quotes/whitespace.
+            if decoded and (
+                decoded.lower() in call_reason.lower()
+                or call_reason.lower() in decoded.lower()
+            ):
+                return Outcome(tx_hash, block_num, "match", call_returndata, trace_returndata,
+                               f"both reverted with overlapping reason ({decoded!r} ~ {call_reason!r})")
             return Outcome(tx_hash, block_num, "mismatch", call_returndata, trace_returndata,
-                           f"both reverted but data differs ({trace_error})")
-        # eth_call did NOT revert but tx did on-chain → real divergence.
+                           f"both reverted but reason differs: trace={decoded!r} call={call_reason!r}")
+
+        # 4. Fallback: nothing matched.
+        if decoded is not None:
+            return Outcome(tx_hash, block_num, "mismatch", call_returndata, trace_returndata,
+                           f"both reverted; trace decoded={decoded!r}, call_msg={call_msg!r}")
         return Outcome(tx_hash, block_num, "mismatch", call_returndata, trace_returndata,
-                       f"trace reverted ({trace_error}) but eth_call succeeded")
+                       f"both reverted but data differs ({trace_error})")
 
     # Success path on-chain.
     if call_returndata.startswith("ERROR:"):
