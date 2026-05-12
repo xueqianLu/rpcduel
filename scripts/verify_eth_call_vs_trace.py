@@ -193,6 +193,17 @@ def verify_one(url: str, tx_hash: str, dataset_block: int, timeout: float) -> Ou
     if block_num is None or block_num <= 0:
         return Outcome(tx_hash, dataset_block, "skip", "", "", "tx has no blockNumber (pending?)")
 
+    # Only the first tx in a block is meaningfully comparable: for any
+    # later tx, the real on-chain execution sees state mutated by all
+    # prior same-block txs, while eth_call at block N-1 sees only the
+    # parent's snapshot. Skip the rest to avoid false mismatches.
+    tx_index = hexint(tx.get("transactionIndex"))
+    if tx_index is None:
+        return Outcome(tx_hash, block_num, "skip", "", "", "tx has no transactionIndex")
+    if tx_index != 0:
+        return Outcome(tx_hash, block_num, "skip", "", "",
+                       f"not first tx in block (transactionIndex={tx_index})")
+
     call_obj = build_call_object(tx)
     if call_obj is None:
         return Outcome(tx_hash, block_num, "skip", "", "", "contract creation (no `to`)")
